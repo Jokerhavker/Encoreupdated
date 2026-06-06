@@ -33,11 +33,13 @@ interface TierConfig {
   maxChannels: number;
   broadcastLimit: number;
   desc?: string;
+  editableCommands?: { command: string; maxLimit: number }[];
 }
 
 export function MirrorAdmin() {
   const [bots, setBots] = useState<MirrorBot[]>([]);
   const [tierConfig, setTierConfig] = useState<TierConfig[]>([]);
+  const [allCommands, setAllCommands] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPlanFilter, setSelectedPlanFilter] = useState('all');
@@ -52,6 +54,7 @@ export function MirrorAdmin() {
   const [editTierChannels, setEditTierChannels] = useState(0);
   const [editTierBroadcast, setEditTierBroadcast] = useState(0);
   const [editTierDesc, setEditTierDesc] = useState('');
+  const [editTierEditableCommands, setEditTierEditableCommands] = useState<{ command: string; maxLimit: number }[]>([]);
 
   // Editing Bot Details Modal/Form State
   const [editingBot, setEditingBot] = useState<MirrorBot | null>(null);
@@ -78,6 +81,9 @@ export function MirrorAdmin() {
       } else {
         setErrorMsg('Failed loading data from server');
       }
+
+      const cmdRes = await axios.get('/api/commands');
+      setAllCommands(cmdRes.data || []);
     } catch (err: any) {
       setErrorMsg(err.response?.data?.error || err.message || 'Error occurred connecting to administration API');
     } finally {
@@ -96,6 +102,7 @@ export function MirrorAdmin() {
     setEditTierChannels(tier.maxChannels);
     setEditTierBroadcast(tier.broadcastLimit);
     setEditTierDesc(tier.desc || '');
+    setEditTierEditableCommands(tier.editableCommands || []);
   };
 
   const handleSaveTier = async (tierId: string) => {
@@ -110,7 +117,8 @@ export function MirrorAdmin() {
             price: Number(editTierPrice),
             maxChannels: Number(editTierChannels),
             broadcastLimit: Number(editTierBroadcast),
-            desc: editTierDesc
+            desc: editTierDesc,
+            editableCommands: editTierEditableCommands
           };
         }
         return t;
@@ -459,12 +467,77 @@ export function MirrorAdmin() {
                             className="bg-white border rounded px-1.5 py-1 w-full text-xs"
                           />
                         </div>
+
+                        <div className="border border-indigo-100 bg-indigo-50/20 rounded-lg p-2 mt-1 space-y-1">
+                          <p className="text-[9px] font-bold text-indigo-950 uppercase tracking-wider">Editable Command Credits</p>
+                          <p className="text-[8px] text-gray-500">Pick which commands this tier can override and upto what limit.</p>
+                          <div className="max-h-24 overflow-y-auto space-y-1 pr-1 divide-y divide-gray-100">
+                            {allCommands.length === 0 && <p className="text-[8px] italic text-gray-400">No commands registered.</p>}
+                            {allCommands.map(c => {
+                              const isSelected = editTierEditableCommands?.some(ec => ec.command === c.command);
+                              const currentLimit = editTierEditableCommands?.find(ec => ec.command === c.command)?.maxLimit || 0;
+                              
+                              return (
+                                <div key={c.command} className="flex items-center justify-between pt-1 pb-1 gap-1">
+                                  <label className="flex items-center gap-1 cursor-pointer select-none">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={isSelected}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setEditTierEditableCommands([...editTierEditableCommands, { command: c.command, maxLimit: c.defaultDailyCredits || 100 }]);
+                                        } else {
+                                          setEditTierEditableCommands(editTierEditableCommands.filter(ec => ec.command !== c.command));
+                                        }
+                                      }}
+                                      className="rounded text-indigo-600 focus:ring-indigo-0 w-2.5 h-2.5"
+                                    />
+                                    <span className="text-[9px] font-mono font-bold text-gray-700">{c.command}</span>
+                                  </label>
+                                  {isSelected && (
+                                    <div className="flex items-center gap-0.5">
+                                      <span className="text-[8px] text-gray-400 uppercase">Max:</span>
+                                      <input 
+                                        type="number"
+                                        value={currentLimit}
+                                        onChange={(e) => {
+                                          const val = Number(e.target.value);
+                                          setEditTierEditableCommands(editTierEditableCommands.map(ec => ec.command === c.command ? { ...ec, maxLimit: val } : ec));
+                                        }}
+                                        className="bg-white border text-[9px] rounded font-mono w-12 px-0.5 py-0 text-center"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </div>
                     ) : (
-                      <div className="space-y-1">
-                        <h4 className="font-extrabold text-sm text-gray-900">{tier.name}</h4>
-                        <p className="font-mono text-emerald-700 font-black text-base">₹{tier.price}/mo</p>
-                        <p className="text-[10px] text-gray-400 leading-tight">{tier.desc || 'No tier descriptions saved yet'}</p>
+                      <div className="space-y-2">
+                        <div className="space-y-1">
+                          <h4 className="font-extrabold text-sm text-gray-900">{tier.name}</h4>
+                          <p className="font-mono text-emerald-700 font-black text-base">₹{tier.price}/mo</p>
+                          <p className="text-[10px] text-gray-400 leading-tight">{tier.desc || 'No tier descriptions saved yet'}</p>
+                        </div>
+                        
+                        {/* Summary of editable commands */}
+                        <div className="bg-white border rounded-lg p-2 text-[10px] text-gray-600 space-y-1">
+                          <p className="font-bold text-gray-700 border-b pb-0.5 text-[9px] uppercase tracking-wide">🔧 Editable Daily Credits Limits:</p>
+                          {tier.editableCommands && tier.editableCommands.length > 0 ? (
+                            <div className="space-y-0.5 max-h-20 overflow-y-auto">
+                              {tier.editableCommands.map((ec: any) => (
+                                <div key={ec.command} className="flex justify-between font-mono text-[9px]">
+                                  <span className="text-gray-600">{ec.command}</span>
+                                  <span className="text-indigo-700 font-bold bg-indigo-50 px-1 rounded">Upto {ec.maxLimit}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[8px] italic text-gray-400">None are editable in this plan.</p>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

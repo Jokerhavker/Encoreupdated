@@ -520,7 +520,7 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     }
   });
 
-  await bot.launch().catch((err: any) => {
+  bot.launch().catch((err: any) => {
     console.error(`Failed launching mirrored bot token: ${token}`, err.message);
   });
   

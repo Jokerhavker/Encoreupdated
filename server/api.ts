@@ -64,6 +64,14 @@ apiRouter.post('/api/mirror-bots', async (req, res) => {
       return res.json({ success: true, bot: existingBot, message: 'Bot updated and started.' });
     }
 
+    // Enforce one single cloned bot per user limit strictly
+    const existingBotForOwner = await MirrorBot.findOne({ ownerTelegramId });
+    if (existingBotForOwner && existingBotForOwner.token !== token) {
+      return res.status(400).json({ 
+        error: `You already have a cloned bot setup (@${existingBotForOwner.botUsername || 'your_bot'}). You must stop & delete your existing bot first to clone a new one.` 
+      });
+    }
+
     // New mirror bot document
     const newBot = await MirrorBot.create({
       token,
@@ -79,6 +87,30 @@ apiRouter.post('/api/mirror-bots', async (req, res) => {
     await startMirrorBot(newBot).catch(() => {});
 
     res.json({ success: true, bot: newBot, message: 'Mirrored Bot registered and activated!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete or stop a user-owned Mirror Bot
+apiRouter.post('/api/mirror-bots/delete', async (req, res) => {
+  try {
+    const { token, ownerTelegramId } = req.body;
+    if (!token || !ownerTelegramId) {
+      return res.status(400).json({ error: 'Missing token or ownerTelegramId' });
+    }
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Bot configuration not found.' });
+
+    if (botDoc.ownerTelegramId !== ownerTelegramId) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this bot.' });
+    }
+
+    stopMirrorBot(token);
+    await MirrorBot.deleteOne({ token });
+
+    res.json({ success: true, message: 'Mirrored bot was deleted and poller stopped completely.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -116,14 +148,259 @@ apiRouter.get('/api/mirror-bots/detail', async (req, res) => {
       groupsCount = await BotGroup.countDocuments({ interactedBots: botUsername });
     }
 
+    const tiersSetting = await Setting.findOne({ key: 'mirrorTiersConfig' });
+    const tierConfig = tiersSetting?.value || [];
+
     res.json({
       success: true,
       bot: botDoc,
       stats: {
         totalUsers: usersCount,
         totalGroups: groupsCount
-      }
+      },
+      tierConfig
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch interacted users and groups list for mirror bots
+apiRouter.get('/api/mirror-bots/users-groups', async (req, res) => {
+  try {
+    const { token, search } = req.query;
+    if (!token) return res.status(400).json({ error: 'Missing token' });
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Mirror bot not found' });
+
+    const botUsername = botDoc.botUsername;
+    if (!botUsername) {
+      return res.json({ success: true, users: [], groups: [] });
+    }
+
+    const searchQuery = search ? String(search).trim() : '';
+    
+    let userFilter: any = { interactedBots: botUsername };
+    let groupFilter: any = { interactedBots: botUsername };
+
+    if (searchQuery) {
+      const regex = new RegExp(searchQuery, 'i');
+      userFilter = {
+        interactedBots: botUsername,
+        $or: [
+          { telegramId: regex },
+          { username: regex },
+          { firstName: regex }
+        ]
+      };
+      groupFilter = {
+        interactedBots: botUsername,
+        $or: [
+          { telegramId: regex },
+          { title: regex }
+        ]
+      };
+    }
+
+    const users = await BotUser.find(userFilter).limit(200);
+    const groups = await BotGroup.find(groupFilter).limit(200);
+
+    res.json({ success: true, users, groups });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Edit specific bot user credits
+apiRouter.post('/api/mirror-bots/update-user-credits', async (req, res) => {
+  try {
+    const { token, userTelegramId, command, commonCreditsAmount } = req.body;
+    if (!token || !userTelegramId || !command) {
+      return res.status(400).json({ error: 'Missing target parameters' });
+    }
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Bot not found' });
+
+    const tiersSetting = await Setting.findOne({ key: 'mirrorTiersConfig' });
+    const tiers = tiersSetting?.value || [];
+    const botPlan = tiers.find((t: any) => t.id === botDoc.plan);
+    const isCommandAllowed = botPlan?.editableCommands?.some((ec: any) => ec.command === command);
+    const isMax = botDoc.plan === 'max';
+
+    if (!isMax && !isCommandAllowed) {
+      return res.status(403).json({ 
+        error: `Your current subscription plan (${botDoc.plan.toUpperCase()}) does not allow customizing daily credits limit or common credits for ${command}. Upgrade subscription plan!` 
+      });
+    }
+
+    const maxLimitForCommand = isMax ? 1000000 : (botPlan?.editableCommands?.find((ec: any) => ec.command === command)?.maxLimit || 100);
+    if (Number(commonCreditsAmount) > maxLimitForCommand) {
+      return res.status(400).json({ 
+        error: `Under your current ${botDoc.plan.toUpperCase()} tier config, you can only set credits up to ${maxLimitForCommand} for ${command}.` 
+      });
+    }
+
+    const user = await BotUser.findOne({ telegramId: userTelegramId });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (!user.commonCredits) {
+      user.commonCredits = new Map();
+    }
+    user.commonCredits.set(command, Number(commonCreditsAmount));
+    user.markModified('commonCredits');
+    await user.save();
+
+    res.json({ success: true, message: 'User credits updated successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Modify global commands limit overrides for this mirrored bot
+apiRouter.post('/api/mirror-bots/update-overrides', async (req, res) => {
+  try {
+    const { token, command, dailyLimit } = req.body;
+    if (!token || !command || dailyLimit === undefined) {
+      return res.status(400).json({ error: 'Missing parameters' });
+    }
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Bot not found' });
+
+    const tiersSetting = await Setting.findOne({ key: 'mirrorTiersConfig' });
+    const tiers = tiersSetting?.value || [];
+    const botPlan = tiers.find((t: any) => t.id === botDoc.plan);
+    const isCommandAllowed = botPlan?.editableCommands?.some((ec: any) => ec.command === command);
+    const isMax = botDoc.plan === 'max';
+
+    if (!isMax && !isCommandAllowed) {
+      return res.status(403).json({ 
+        error: `Your current tier plan (${botDoc.plan.toUpperCase()}) does not authorize editing daily credit limit of ${command}. Upgrade subscription first.` 
+      });
+    }
+
+    const maxLimitAllowed = isMax ? 1000000 : (botPlan?.editableCommands?.find((ec: any) => ec.command === command)?.maxLimit || 100);
+    if (Number(dailyLimit) > maxLimitAllowed) {
+      return res.status(400).json({ 
+        error: `Your current ${botDoc.plan.toUpperCase()} tier allows configuring a limit up to ${maxLimitAllowed} daily credits for ${command}.` 
+      });
+    }
+
+    if (!botDoc.commandCreditsOverrides) {
+      botDoc.commandCreditsOverrides = [];
+    }
+    
+    const existingIdx = botDoc.commandCreditsOverrides.findIndex((o: any) => o.command === command);
+    if (existingIdx >= 0) {
+      botDoc.commandCreditsOverrides[existingIdx].dailyLimit = Number(dailyLimit);
+    } else {
+      botDoc.commandCreditsOverrides.push({ command, dailyLimit: Number(dailyLimit) });
+    }
+
+    botDoc.markModified('commandCreditsOverrides');
+    await botDoc.save();
+
+    stopMirrorBot(token);
+    await startMirrorBot(botDoc);
+
+    res.json({ success: true, bot: botDoc, message: 'Global bot daily credit limit updated successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Verify mirror bot plan purchase
+apiRouter.post('/api/mirror-bots/verify-payment', async (req, res) => {
+  try {
+    const { token, ownerTelegramId, plan, amount, paymentId } = req.body;
+    if (!token || !ownerTelegramId || !plan || !amount || !paymentId) {
+      return res.status(400).json({ error: 'Missing required validation parameters.' });
+    }
+
+    const cleanPaymentId = String(paymentId).trim();
+
+    const spentTxn = await UsedTransaction.findOne({ transactionId: cleanPaymentId });
+    if (spentTxn) {
+      return res.status(400).json({ error: 'This transaction/UTR ID has already been verified and used.' });
+    }
+
+    let foundTxn: any = null;
+    try {
+      const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanPaymentId}`);
+      if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
+        foundTxn = utrRes.data.results.find((item: any) => {
+          const isSuccess = String(item.Payment).toLowerCase() === 'success';
+          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+          return isSuccess && isAmountMatch;
+        });
+      }
+
+      if (!foundTxn) {
+        const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanPaymentId}`);
+        if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
+          foundTxn = idRes.data.results.find((item: any) => {
+            const isSuccess = String(item.Payment).toLowerCase() === 'success';
+            const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+            return isSuccess && isAmountMatch;
+          });
+        }
+      }
+    } catch (apiErr: any) {
+      console.error("[Fampay Verification Request Error]", apiErr.message);
+      return res.status(502).json({ error: 'Fampay payment service network error. Please try again.' });
+    }
+
+    if (!foundTxn) {
+      return res.status(404).json({ 
+        error: 'Payment transaction not found or amount mismatch. Ensure you paid the exact amount and entered correct UTR.' 
+      });
+    }
+
+    const finalUtr = foundTxn.utr || cleanPaymentId;
+    const finalTxnId = foundTxn.txn_id || cleanPaymentId;
+
+    const doubleSpentCheckUtr = await UsedTransaction.findOne({ transactionId: finalUtr });
+    if (doubleSpentCheckUtr) {
+      return res.status(400).json({ error: 'This transaction has already been verified for another purchase.' });
+    }
+
+    await UsedTransaction.create({ transactionId: finalUtr, telegramId: ownerTelegramId, amount: Number(amount), type: `mirror_subscription_${plan}` });
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Configured cloned bot reference missing.' });
+
+    botDoc.plan = plan;
+    const isAlreadySubbed = botDoc.expiresAt && new Date(botDoc.expiresAt).getTime() > Date.now();
+    const baseTime = isAlreadySubbed ? new Date(botDoc.expiresAt).getTime() : Date.now();
+    botDoc.expiresAt = new Date(baseTime + 30 * 24 * 60 * 60 * 1000); 
+    await botDoc.save();
+
+    stopMirrorBot(token);
+    if (botDoc.isActive) {
+      await startMirrorBot(botDoc).catch((e: any) => console.error("Failed restarting bot poller:", e));
+    }
+
+    try {
+      const topLevelBotInstance = (await import("./bot.js")).getBot();
+      if (topLevelBotInstance) {
+        await topLevelBotInstance.telegram.sendMessage(
+          ownerTelegramId,
+          `🎉 *Mirrored Bot Upgraded Successfully!* 🎉\n\n` +
+          `Your cloned bot @${botDoc.botUsername || 'your_bot'} has been upgraded to *${plan.toUpperCase()} Tier*!\n\n` +
+          `💰 *Amount Paid:* ₹${amount}\n` +
+          `📅 *Expiry extended:* ${new Date(botDoc.expiresAt).toLocaleDateString("en-IN")}\n` +
+          `💳 *UTR:* \`${finalUtr}\`\n\n` +
+          `Thank you for trusting ENCORE XOSINT!`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+    } catch (msgErr) {
+      console.warn("Failed sending notification DM", msgErr);
+    }
+
+    res.json({ success: true, bot: botDoc, message: `Mirrored Bot promoted to ${plan.toUpperCase()} Tier successfully!` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

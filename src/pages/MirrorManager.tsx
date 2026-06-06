@@ -19,12 +19,34 @@ export function MirrorManager() {
   const [botDetail, setBotDetail] = useState<any>(null);
   const [botStats, setBotStats] = useState<any>({ totalUsers: 0, totalGroups: 0 });
   const [ownedBots, setOwnedBots] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'bans' | 'broadcast'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'bans' | 'users_groups' | 'shop' | 'broadcast'>('overview');
 
   // Loading & Messages
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Subelement states
+  const [usersList, setUsersList] = useState<any[]>([]);
+  const [groupsList, setGroupsList] = useState<any[]>([]);
+  const [ugSearchQuery, setUgSearchQuery] = useState('');
+  const [registeredTiers, setRegisteredTiers] = useState<any[]>([]);
+
+  // User Credit Editor
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [editCreditsCommand, setEditCreditsCommand] = useState('');
+  const [editCreditsAmount, setEditCreditsAmount] = useState(0);
+
+  // Global Command override editors
+  const [botOverrideCmd, setBotOverrideCmd] = useState('');
+  const [botOverrideVal, setBotOverrideVal] = useState(50);
+
+  // Shop / Purchasing States
+  const [checkoutPlan, setCheckoutPlan] = useState<any | null>(null);
+  const [utrInput, setUtrInput] = useState('');
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [payError, setPayError] = useState('');
+  const [paySuccess, setPaySuccess] = useState('');
 
   // Page inputs
   const [tempTokenInput, setTempTokenInput] = useState('');
@@ -84,6 +106,7 @@ export function MirrorManager() {
       if (res.data?.success) {
         setBotDetail(res.data.bot);
         setBotStats(res.data.stats);
+        setRegisteredTiers(res.data.tierConfig || []);
         setCustomBotName(res.data.bot.customBotName || '');
         setDefaultGroupCredits(res.data.bot.defaultGroupCredits || 50);
         setIsAuthenticated(true);
@@ -92,6 +115,7 @@ export function MirrorManager() {
           localStorage.setItem('mirror_owner_id', res.data.bot.ownerTelegramId);
           setOwnerTelegramId(res.data.bot.ownerTelegramId);
           fetchOwnedBots(res.data.bot.ownerTelegramId);
+          fetchUsersAndGroups(botToken, ugSearchQuery);
         }
       } else {
         setErrorMsg('Could not fetch mirrored bot details.');
@@ -102,6 +126,106 @@ export function MirrorManager() {
       setIsAuthenticated(false);
     }
     setLoading(false);
+  };
+
+  // Fetch interacting users and groups
+  const fetchUsersAndGroups = async (botToken: string, searchVal: string) => {
+    if (!botToken) return;
+    try {
+      const res = await axios.get(`/api/mirror-bots/users-groups?token=${encodeURIComponent(botToken)}&search=${encodeURIComponent(searchVal)}`);
+      if (res.data?.success) {
+        setUsersList(res.data.users || []);
+        setGroupsList(res.data.groups || []);
+      }
+    } catch (err) {
+      console.error("Error loading users and groups of mirror bot", err);
+    }
+  };
+
+  // Sync users/groups whenever searching or active tabulated view changes
+  useEffect(() => {
+    if (isAuthenticated && token && activeTab === 'users_groups') {
+      fetchUsersAndGroups(token, ugSearchQuery);
+    }
+  }, [activeTab, ugSearchQuery, isAuthenticated, token]);
+
+  // Handle saving specific user command credits
+  const handleSaveUserCredits = async () => {
+    if (!token || !editingUser || !editCreditsCommand) return;
+    setLoading(true);
+    setSuccessMsg('');
+    setErrorMsg('');
+    try {
+      const res = await axios.post('/api/mirror-bots/update-user-credits', {
+        token,
+        userTelegramId: editingUser.telegramId,
+        command: editCreditsCommand,
+        commonCreditsAmount: editCreditsAmount
+      });
+      if (res.data?.success) {
+        setSuccessMsg(res.data.message || 'User credits edited successfully!');
+        setEditingUser(null);
+        fetchUsersAndGroups(token, ugSearchQuery);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.error || 'Failed editing user credits.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle saving global override
+  const handleSaveGlobalOverride = async (cmd: string, val: number) => {
+    if (!token || !cmd) return;
+    setLoading(true);
+    setSuccessMsg('');
+    setErrorMsg('');
+    try {
+      const res = await axios.post('/api/mirror-bots/update-overrides', {
+        token,
+        command: cmd,
+        dailyLimit: val
+      });
+      if (res.data?.success) {
+        setSuccessMsg(res.data.message || 'Global override limits updated successfully!');
+        setBotDetail(res.data.bot);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.error || 'Failed updating command credentials override limit.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle purchasing and verifying subscription tier upgrade
+  const handleVerifySubPayment = async (planId: string, itemPrice: number) => {
+    if (!token || !ownerTelegramId || !planId) return;
+    if (!utrInput.trim()) {
+      setPayError('Please fill your 12-digit UPI transaction reference / UTR ID first.');
+      return;
+    }
+    setPaymentProcessing(true);
+    setPayError('');
+    setPaySuccess('');
+    try {
+      const res = await axios.post('/api/mirror-bots/verify-payment', {
+        token,
+        ownerTelegramId,
+        plan: planId,
+        amount: itemPrice,
+        paymentId: utrInput.trim()
+      });
+      if (res.data?.success) {
+        setPaySuccess(`Congratulations! Your payment has been checked out successfully. Your bot has been upgraded to ${planId.toUpperCase()}!`);
+        setUtrInput('');
+        setCheckoutPlan(null);
+        await loadBotProfile(token); // refresh details
+      }
+    } catch (err: any) {
+      setPayError(err.response?.data?.error || 'Verification failed. Double check your UTR or paid money.');
+    } finally {
+      setPaymentProcessing(false);
+    }
   };
 
   // Find all bots registered under the current telegram ID
@@ -116,6 +240,14 @@ export function MirrorManager() {
       console.error(e);
     }
   };
+
+  useEffect(() => {
+    if (tempUserIdInput.trim()) {
+      fetchOwnedBots(tempUserIdInput.trim());
+    } else {
+      setOwnedBots([]);
+    }
+  }, [tempUserIdInput]);
 
   // Standard token onboarding registration / claim
   const handleOnboard = async (e: React.FormEvent) => {
@@ -143,6 +275,8 @@ export function MirrorManager() {
         });
 
         if (reg.data?.success) {
+          localStorage.setItem('mirror_bot_token', tok);
+          localStorage.setItem('mirror_owner_id', tgId);
           setToken(tok);
           setOwnerTelegramId(tgId);
           setSuccessMsg('Your mirrored bot has been initialized and started!');
@@ -516,6 +650,85 @@ export function MirrorManager() {
           </form>
         </div>
 
+        {/* Owned bots list on login screen */}
+        {ownedBots.length > 0 && (
+          <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 space-y-3">
+            <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide flex items-center gap-1.5 border-b pb-2">
+              <Bot className="w-4 h-4 text-indigo-600" />
+              Your Cloned Bot(s) ({ownedBots.length}/1)
+            </h3>
+            <div className="divide-y divide-gray-50">
+              {ownedBots.map((b: any) => (
+                <div key={b.token} className="py-3 flex items-center justify-between gap-3 text-xs">
+                  <div>
+                    <p className="font-semibold text-gray-900 flex items-center gap-1.5 align-middle">
+                      {b.customBotName || b.botName || 'Mirrored Bot'}
+                      <span className={`w-2 h-2 rounded-full inline-block ${b.isActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} title={b.isActive ? 'Active Poller Running' : 'Poller Paused'} />
+                    </p>
+                    <p className="text-[10px] font-mono text-gray-400">@{b.botUsername || 'unregistered'}</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Plan tier: <span className="font-semibold text-indigo-600 uppercase">{b.plan}</span></p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('mirror_bot_token', b.token);
+                        localStorage.setItem('mirror_owner_id', b.ownerTelegramId);
+                        setToken(b.token);
+                        setOwnerTelegramId(b.ownerTelegramId);
+                      }}
+                      className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold px-3 py-1.5 rounded transition text-[10px] cursor-pointer"
+                    >
+                      Manage
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const nextState = !b.isActive;
+                          const res = await axios.post('/api/mirror-bots/toggle-active', {
+                            token: b.token,
+                            isActive: nextState
+                          });
+                          if (res.data?.success) {
+                            fetchOwnedBots(tempUserIdInput);
+                          }
+                        } catch (err: any) {
+                          alert(err.response?.data?.error || 'Failed pausing bot.');
+                        }
+                      }}
+                      className={`font-semibold px-2.5 py-1.5 rounded transition text-[10px] cursor-pointer ${
+                        b.isActive ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      }`}
+                    >
+                      {b.isActive ? 'Stop' : 'Start'}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (window.confirm(`Are you sure you want to completely delete @${b.botUsername}? This cannot be undone.`)) {
+                          try {
+                            const res = await axios.post('/api/mirror-bots/delete', {
+                              token: b.token,
+                              ownerTelegramId: b.ownerTelegramId
+                            });
+                            if (res.data?.success) {
+                              alert('Bot deleted successfully!');
+                              fetchOwnedBots(tempUserIdInput);
+                            }
+                          } catch (err: any) {
+                            alert(err.response?.data?.error || 'Failed deleting bot.');
+                          }
+                        }
+                      }}
+                      className="bg-red-50 text-red-600 hover:bg-red-100 font-semibold px-2.5 py-1.5 rounded transition text-[10px] cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Informative Walkthrough */}
         <div className="bg-indigo-50/50 rounded-xl p-5 border border-indigo-100/50 space-y-3 text-xs leading-relaxed text-indigo-950">
           <p className="font-bold text-indigo-900 flex items-center gap-1.5 uppercase tracking-wider">
@@ -586,6 +799,34 @@ export function MirrorManager() {
             className="px-3 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-50 transition cursor-pointer"
           >
             Disconnect Bot
+          </button>
+
+          <button
+            onClick={async () => {
+              if (window.confirm("Are you sure you want to completely delete this mirrored bot and stop its polling service? This cannot be undone.")) {
+                try {
+                  setLoading(true);
+                  const res = await axios.post('/api/mirror-bots/delete', {
+                    token: botDetail.token,
+                    ownerTelegramId: botDetail.ownerTelegramId
+                  });
+                  if (res.data?.success) {
+                    alert('Bot deleted successfully!');
+                    handleExitBotSession();
+                  } else {
+                    alert('Deletion failed.');
+                  }
+                } catch (err: any) {
+                  alert(err.response?.data?.error || 'Error deleting bot.');
+                } finally {
+                  setLoading(false);
+                }
+              }
+            }}
+            disabled={loading}
+            className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700 transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete Bot
           </button>
         </div>
       </div>
@@ -670,6 +911,22 @@ export function MirrorManager() {
               ${activeTab === 'bans' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
           >
             <Ban className="w-4 h-4 shrink-0" /> Ban ID Terminal
+          </button>
+
+          <button
+            onClick={() => setActiveTab('users_groups')}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
+              ${activeTab === 'users_groups' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            <Users className="w-4 h-4 shrink-0" /> Users & Groups
+          </button>
+
+          <button
+            onClick={() => setActiveTab('shop')}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
+              ${activeTab === 'shop' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            <Award className="w-4 h-4 shrink-0" /> Upgrade & Shop
           </button>
 
           <button
@@ -1218,6 +1475,441 @@ export function MirrorManager() {
                   📡 Dispatch Local Campaign
                 </button>
               </form>
+            </div>
+          )}
+
+          {/* TAB 6: Users & Groups list */}
+          {activeTab === 'users_groups' && (
+            <div className="space-y-6">
+              {/* Search Control Board */}
+              <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <Users className="w-5 h-5 text-indigo-600" /> Users & Groups Management
+                  </h3>
+                  <p className="text-[10px] text-gray-400 font-medium mt-1">Below are all active private chats and groups chatting with your cloned bot.</p>
+                </div>
+                <div className="w-full md:w-72">
+                  <input 
+                    type="text"
+                    placeholder="Search by ID, title, or username..."
+                    value={ugSearchQuery}
+                    onChange={(e) => setUgSearchQuery(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-1.5 text-xs bg-gray-50 focus:bg-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Grid Containers representing target classes */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                
+                {/* Users Column */}
+                <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 space-y-4">
+                  <h4 className="font-extrabold text-xs text-gray-900 border-b pb-2 uppercase tracking-wide text-indigo-950 flex items-center gap-1.5">
+                    👤 Private Users ({usersList.length})
+                  </h4>
+                  {usersList.length === 0 ? (
+                    <p className="text-[11px] text-gray-400 italic">No direct private users have interacted with this bot yet.</p>
+                  ) : (
+                    <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                      {usersList.map(u => {
+                        const isBanned = botDetail?.bannedUsers?.includes(u.telegramId);
+                        return (
+                          <div key={u.telegramId} className="p-3 bg-gray-50 rounded-lg border border-gray-100 flex flex-col justify-between gap-2.5 sm:flex-row sm:items-center">
+                            <div>
+                              <p className="font-semibold text-xs text-gray-800">{u.firstName || 'User'} {u.username && <span className="text-indigo-600 font-mono text-[10px]">@{u.username}</span>}</p>
+                              <p className="font-mono text-[9px] text-gray-400">Telegram ID: <span className="text-gray-600 font-bold">{u.telegramId}</span></p>
+                              {u.commonCredits && Object.keys(u.commonCredits).length > 0 && (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  <span className="text-[8px] text-gray-400 uppercase tracking-widest block w-full">Custom Credits:</span>
+                                  {Object.entries(u.commonCredits).map(([cmd, amt]: any) => (
+                                    <span key={cmd} className="bg-indigo-50 text-indigo-700 text-[8px] font-mono px-1 rounded font-bold">{cmd}: {amt}</span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-1.5 items-center">
+                              {/* Credit editor button */}
+                              <button
+                                onClick={() => {
+                                  setEditingUser(u);
+                                  setEditCreditsAmount(u.commonCredits?.[defaultCommands[0]?.command] || 0);
+                                  setEditCreditsCommand(defaultCommands[0]?.command || '');
+                                }}
+                                className="bg-white border text-[10px] py-1 px-2.5 rounded-md text-gray-700 hover:bg-gray-150 cursor-pointer text-center font-semibold"
+                              >
+                                💳 Edit Credits
+                              </button>
+
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const res = await axios.post('/api/mirror-bots/ban', {
+                                      token,
+                                      targetId: u.telegramId,
+                                      type: 'user',
+                                      isBanned: !isBanned
+                                    });
+                                    if (res.data?.success) {
+                                      setSuccessMsg(res.data.message);
+                                      await loadBotProfile(token);
+                                    }
+                                  } catch (e: any) {
+                                    setErrorMsg(e.response?.data?.error || 'Failed to ban/unban user');
+                                  }
+                                }}
+                                className={`text-[10px] py-1 px-2.5 rounded-md font-bold cursor-pointer text-center text-white transition
+                                  ${isBanned ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}
+                              >
+                                {isBanned ? 'Lift Ban' : 'Ban User'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Groups Column */}
+                <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 space-y-4">
+                  <h4 className="font-extrabold text-xs text-gray-900 border-b pb-2 uppercase tracking-wide text-indigo-950 flex items-center gap-1.5">
+                    👥 Group Chats ({groupsList.length})
+                  </h4>
+                  {groupsList.length === 0 ? (
+                    <p className="text-[11px] text-gray-400 italic">No group chats have registered this bot yet.</p>
+                  ) : (
+                    <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                      {groupsList.map(g => {
+                        const isBanned = botDetail?.bannedGroups?.includes(g.telegramId);
+                        return (
+                          <div key={g.telegramId} className="p-3 bg-gray-50 rounded-lg border border-gray-100 flex flex-col justify-between gap-2.5 sm:flex-row sm:items-center">
+                            <div>
+                              <p className="font-semibold text-xs text-gray-800">{g.title || 'Untitled Group'}</p>
+                              <p className="font-mono text-[9px] text-gray-400">Chat ID: <span className="text-gray-600 font-bold">{g.telegramId}</span></p>
+                            </div>
+                            <div className="flex gap-1.5 items-center">
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const res = await axios.post('/api/mirror-bots/ban', {
+                                      token,
+                                      targetId: g.telegramId,
+                                      type: 'group',
+                                      isBanned: !isBanned
+                                    });
+                                    if (res.data?.success) {
+                                      setSuccessMsg(res.data.message);
+                                      await loadBotProfile(token);
+                                    }
+                                  } catch (e: any) {
+                                    setErrorMsg(e.response?.data?.error || 'Failed to ban/unban group');
+                                  }
+                                }}
+                                className={`text-[10px] py-1 px-2.5 rounded-md font-bold cursor-pointer text-center text-white transition
+                                  ${isBanned ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}
+                              >
+                                {isBanned ? 'Lift Ban' : 'Ban Group'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* User Credits Management Modal */}
+              {editingUser && (
+                <div className="fixed inset-0 bg-indigo-950/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+                  <div className="bg-white rounded-2xl max-w-sm w-full p-6 border shadow-xl space-y-4">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-gray-900">Custom Credits Configuration</h4>
+                      <p className="text-[10px] text-gray-400 font-medium">Modify custom common credits for direct interaction or specify command limits.</p>
+                    </div>
+
+                    <div className="bg-indigo-50/50 rounded-lg p-3 border border-indigo-100 text-[11px] text-gray-700 font-medium font-sans">
+                      <span className="font-bold text-gray-900">Target Member:</span> {editingUser.firstName} {editingUser.username && <span>(@{editingUser.username})</span>}
+                      <br />
+                      <span className="font-bold text-gray-900 font-mono">ID:</span> {editingUser.telegramId}
+                    </div>
+
+                    <div className="space-y-3 font-sans">
+                      <div>
+                        <label className="text-[10px] uppercase font-bold text-indigo-950 block mb-1">Target Command</label>
+                        <select
+                          value={editCreditsCommand}
+                          onChange={(e) => {
+                            setEditCreditsCommand(e.target.value);
+                            setEditCreditsAmount(editingUser.commonCredits?.[e.target.value] || 0);
+                          }}
+                          className="w-full border rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          {defaultCommands.map(c => (
+                            <option key={c.command} value={c.command}>{c.command} (Default: {c.defaultDailyCredits})</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] uppercase font-bold text-indigo-950 block mb-1">Common Credits Override Limit</label>
+                        <input 
+                          type="number"
+                          value={editCreditsAmount}
+                          onChange={(e) => setEditCreditsAmount(Number(e.target.value))}
+                          className="w-full border rounded-lg px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          placeholder="e.g. 150"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t">
+                      <button
+                        onClick={() => setEditingUser(null)}
+                        className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveUserCredits}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer transition"
+                      >
+                        Save Overrides
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 7: Detailed Purchasing & Plan Upgrades page */}
+          {activeTab === 'shop' && (
+            <div className="space-y-6">
+              
+              {/* Plan Cards display */}
+              <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5">
+                <div className="border-b pb-3 mb-5">
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <Award className="w-5 h-5 text-indigo-600" /> Professional Subscription Elevators
+                  </h3>
+                  <p className="text-[10px] text-gray-400 font-medium mt-1">
+                    Upgrade your mirrored instance to unlock extended limits, bespoke command parameters, custom brand logs, and larger force join capabilities!
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                  {registeredTiers.filter(t => t.id !== 'free').map(t => {
+                    const isCurrent = botDetail?.plan === t.id;
+                    return (
+                      <div key={t.id} className={`rounded-xl border p-5 flex flex-col justify-between transition relative overflow-hidden
+                        ${isCurrent 
+                          ? 'border-indigo-600 bg-indigo-50/10 ring-1 ring-indigo-600 shadow-md' 
+                          : 'border-gray-200 hover:shadow-md bg-white'}`}
+                      >
+                        {isCurrent && (
+                          <span className="absolute top-2 right-2 bg-indigo-600 text-white font-mono text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full">
+                            Active Plan
+                          </span>
+                        )}
+                        
+                        <div className="space-y-4">
+                          <div>
+                            <span className="font-extrabold text-xs uppercase text-indigo-600 tracking-widest">{t.id} Plan</span>
+                            <h4 className="font-black text-lg text-gray-950 mt-1">{t.name}</h4>
+                            <p className="text-2xl font-black text-gray-900 font-mono mt-1.5">₹{t.price}<span className="text-xs font-normal text-gray-400">/mo</span></p>
+                          </div>
+
+                          <div className="divide-y text-[11px] text-gray-650 font-sans">
+                            <div className="py-2 flex justify-between">
+                              <span>Max Force Channels:</span>
+                              <span className="font-bold text-gray-900 font-mono">{t.maxChannels}</span>
+                            </div>
+                            <div className="py-2 flex justify-between">
+                              <span>Day Broadcasts:</span>
+                              <span className="font-bold text-gray-900 font-mono">{t.broadcastLimit}</span>
+                            </div>
+                            <div className="py-2 text-[10px] text-gray-500 leading-normal italic">
+                              {t.desc || 'Gain privilege access to command overrides & customizable database systems!'}
+                            </div>
+                          </div>
+
+                          {t.editableCommands && t.editableCommands.length > 0 && (
+                            <div className="border border-indigo-50 bg-indigo-50/30 rounded-lg p-2.5">
+                              <p className="text-[9px] uppercase font-bold text-indigo-950 tracking-wider">Customizable Command Credits limits</p>
+                              <div className="grid grid-cols-1 gap-1 mt-1 font-mono text-[10px] text-gray-650">
+                                {t.editableCommands.map((ec: any) => (
+                                  <div key={ec.command} className="flex justify-between">
+                                    <span>{ec.command}</span>
+                                    <span className="font-bold text-indigo-600">Up to {ec.maxLimit}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-5">
+                          <button
+                            onClick={() => {
+                              setCheckoutPlan(t);
+                              setPayError('');
+                              setPaySuccess('');
+                              setUtrInput('');
+                            }}
+                            className={`w-full font-bold py-2 px-4 rounded-lg text-xs cursor-pointer tracking-wider text-center transition
+                              ${isCurrent 
+                                ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' 
+                                : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                          >
+                            {isCurrent ? 'Extend Plan (30 Days)' : `Choose ${t.name}`}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* UPI Checkout Screen Portal Modal */}
+              {checkoutPlan && (
+                <div className="fixed inset-0 bg-indigo-950/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 font-sans">
+                  <div className="bg-white rounded-2xl max-w-md w-full p-6 border shadow-2xl space-y-4 text-left max-h-[90vh] overflow-y-auto">
+                    <div className="flex justify-between items-start border-b pb-2">
+                      <div>
+                        <h4 className="font-black text-base text-gray-900">Secure UPI Checkout Terminal</h4>
+                        <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
+                      </div>
+                      <button 
+                        onClick={() => setCheckoutPlan(null)}
+                        className="p-1 hover:bg-gray-150 rounded-full font-bold text-gray-400 hover:text-gray-750 text-xs cursor-pointer"
+                      >
+                        ✕ Close
+                      </button>
+                    </div>
+
+                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 text-gray-705 space-y-2.5 text-xs text-center">
+                      <p className="font-bold text-indigo-950 uppercase tracking-widest text-[9px]">UPI Payment Credentials</p>
+                      
+                      {/* Deep Link Payment trigger */}
+                      <a 
+                        href={`upi://pay?pa=alkhkumar@fam&pn=Encore%20Xosint&am=${checkoutPlan.price}&cu=INR`}
+                        className="inline-block bg-indigo-600 text-white font-extrabold tracking-wide rounded-lg px-4 py-2 hover:bg-indigo-700 transition"
+                      >
+                        Pay ₹{checkoutPlan.price} instantly in UPI app
+                      </a>
+
+                      <p className="text-[10px] text-gray-400 font-medium">Or pay manually to the official receiver address:</p>
+                      <div className="bg-white border rounded px-3 py-1.5 font-mono text-center font-bold text-gray-800 text-sm flex items-center justify-center gap-1 w-full mx-auto max-w-[200px]">
+                        alkhkumar@fam
+                      </div>
+                    </div>
+
+                    <div className="space-y-3.5">
+                      <div className="border border-amber-150 bg-amber-50 rounded-xl p-3 text-[10px] text-amber-900 leading-relaxed font-semibold">
+                        ⚠️ DOUBLE-SPEND REACTION SYSTEM ACTIVE: Ensure you copy-paste the exact 12-digit transaction ID / UTR hash from your UPI application (e.g. Google Pay, PhonePe, Paytm, Fampay) after successful transfer. Simulated transactions are automatically filtered.
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref (12-Digit ID)</label>
+                        <input 
+                          type="text"
+                          placeholder="e.g. 614050212984"
+                          value={utrInput}
+                          onChange={(e) => setUtrInput(e.target.value.replace(/\D/g, '').substring(0, 12))}
+                          className="w-full border rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <p className="text-[9px] text-gray-400">Must be exactly a 12-digit UPI number sequence.</p>
+                      </div>
+
+                      {payError && (
+                        <div className="p-3 bg-red-50 border border-red-100 text-red-800 text-[10px] rounded-lg font-bold">
+                          ❌ {payError}
+                        </div>
+                      )}
+
+                      {paySuccess && (
+                        <div className="p-3 bg-green-50 border border-green-100 text-green-800 text-[10px] rounded-lg font-bold font-sans">
+                          🎉 {paySuccess}
+                        </div>
+                      )}
+
+                      <div className="flex gap-2 justify-end pt-2 border-t font-sans">
+                        <button
+                          onClick={() => setCheckoutPlan(null)}
+                          disabled={paymentProcessing}
+                          className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleVerifySubPayment(checkoutPlan.id, checkoutPlan.price)}
+                          disabled={paymentProcessing}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer flex items-center justify-center gap-1"
+                        >
+                          {paymentProcessing ? 'Verifying payment...' : 'Verify Transfer & Activate Plan'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 8: Global commands adjustments on overview */}
+          {activeTab === 'overview' && botDetail && (
+            <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 space-y-4">
+              <div className="border-b pb-2">
+                <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider text-indigo-950 flex items-center gap-1.5">
+                  🔧 Command-specific daily credit limits overrides
+                </h4>
+                <p className="text-[10px] text-gray-400 font-medium font-sans">Under your current plan ({botDetail.plan.toUpperCase()}), adjust the daily limit overrides enforced by this bot.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {defaultCommands.map(cmd => {
+                  const currentOverride = botDetail.commandCreditsOverrides?.find((co: any) => co.command === cmd.command)?.dailyLimit;
+                  const activeLimit = currentOverride !== undefined ? currentOverride : cmd.defaultDailyCredits;
+                  
+                  return (
+                    <div key={cmd.command} className="bg-gray-50/50 border border-gray-100 rounded-lg p-3 flex flex-col justify-between gap-2.5">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-mono text-xs font-black text-gray-800">{cmd.command}</p>
+                          <p className="text-[10px] text-gray-400 font-sans">Regular: {cmd.defaultDailyCredits} credits</p>
+                        </div>
+                        <span className="bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded">
+                          Current: {activeLimit}
+                        </span>
+                      </div>
+
+                      <div className="flex gap-1.5 items-center">
+                        <input
+                          type="number"
+                          placeholder="New override"
+                          className="bg-white border text-[10px] rounded font-mono px-1 py-0.5 w-full text-center"
+                          id={`over-${cmd.command}`}
+                        />
+                        <button
+                          onClick={() => {
+                            const valStr = (document.getElementById(`over-${cmd.command}`) as HTMLInputElement)?.value;
+                            if (valStr) {
+                              handleSaveGlobalOverride(cmd.command, Number(valStr));
+                              (document.getElementById(`over-${cmd.command}`) as HTMLInputElement).value = '';
+                            }
+                          }}
+                          className="bg-indigo-600 text-white font-bold text-[10px] px-2.5 py-1 rounded cursor-pointer shrink-0 transition hover:bg-indigo-700"
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

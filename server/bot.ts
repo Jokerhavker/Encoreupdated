@@ -1558,7 +1558,7 @@ export async function initializeBot() {
         const markup = {
           inline_keyboard: [
             [{ text: "👤 My Profile", callback_data: "view_profile", style: "success" } as any],
-            [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirror-bots` } } as any],
+            [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors` } } as any],
             [{ text: "🛍️ Bot Shop (New)", callback_data: "view_shop", style: "success" } as any],
             [{ text: "ℹ️ Help Center", callback_data: "view_help", style: "primary" } as any],
           ],
