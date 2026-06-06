@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import axios from 'axios';
+import { Telegraf } from 'telegraf';
 import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest } from './db.js';
 import { getBot, setupWebhook } from './bot.js';
 import { 
@@ -126,6 +127,9 @@ apiRouter.get('/api/mirror-bots', async (req, res) => {
       return res.status(400).json({ error: 'Missing ownerTelegramId' });
     }
     const bots = await MirrorBot.find({ ownerTelegramId });
+    for (const b of bots) {
+      await checkAndResetIntegrationPoints(b).catch(() => {});
+    }
     res.json(bots);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -475,6 +479,42 @@ apiRouter.post('/api/mirror-bots/toggle-active', async (req, res) => {
 
     res.json({ success: true, isActive: botDoc.isActive });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fix Stuck endpoint: manually deletes any Telegram webhook and forces a clean start
+apiRouter.post('/api/mirror-bots/fix-stuck', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Missing token' });
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Bot configuration not found' });
+
+    console.log(`[Fix Stuck Request] Hard-resetting webhook/polling for bot: @${botDoc.botUsername || token.substring(0, 8)}`);
+
+    // Stop current instance in active pollers map
+    stopMirrorBot(token);
+
+    // Create a temporary Telegraf instance to invoke deleteWebhook from Telegram servers directly
+    const tempBot = new Telegraf(token);
+    await tempBot.telegram.deleteWebhook({ drop_pending_updates: true }).catch((e) => {
+      console.warn("[Fix Stuck Webhook Delete Warn]", e.message);
+    });
+
+    // Freshly launch the Mirror bot
+    const reloaded = await MirrorBot.findOne({ token });
+    if (reloaded) {
+      await startMirrorBot(reloaded);
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully flushed hook, dropped pending queues, and reconfigured live handlers for @${botDoc.botUsername || 'your bot'}!`
+    });
+  } catch (err: any) {
+    console.error("[Fix Stuck API Error]", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2008,6 +2048,20 @@ apiRouter.post('/api/admin/mirror-bots/tier-config', async (req, res) => {
 
     res.json({ success: true, message: 'Mirror Subscription Tiers updated successfully!' });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clean Command logs
+apiRouter.post('/api/admin/clean-command-logs', async (req, res) => {
+  try {
+    const result = await Statlog.deleteMany({});
+    res.json({
+      success: true,
+      message: `Successfully cleaned command usage logs! Permanently deleted ${result.deletedCount ?? 0} usage entry records.`
+    });
+  } catch (err: any) {
+    console.error("[Clean Command Log API Error]", err);
     res.status(500).json({ error: err.message });
   }
 });

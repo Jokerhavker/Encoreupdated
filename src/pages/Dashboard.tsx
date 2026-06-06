@@ -1,15 +1,34 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import axios from 'axios';
-import { Users, Code, Activity, Layers, ActivitySquare, Eye, X } from 'lucide-react';
+import { Users, Code, Activity, Layers, ActivitySquare, Eye, X, Trash2 } from 'lucide-react';
 
 export function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [selectedLog, setSelectedLog] = useState<any>(null);
+  const [cleaning, setCleaning] = useState(false);
 
   useEffect(() => {
     axios.get('/api/stats/dashboard').then(res => setStats(res.data)).catch(console.error);
   }, []);
+
+  const handleCleanLogs = async () => {
+    if (!window.confirm("Are you sure you want to permanently delete all command usage logs from the database? This cannot be undone.")) {
+      return;
+    }
+    try {
+      setCleaning(true);
+      const res = await axios.post('/api/admin/clean-command-logs');
+      alert(res.data.message || 'Usage logs cleaned successfully.');
+      const fresh = await axios.get('/api/stats/dashboard');
+      setStats(fresh.data);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.error || 'Failed to clean usage logs.');
+    } finally {
+      setCleaning(false);
+    }
+  };
 
   if (!stats) return <div className="text-gray-500 animate-pulse">Loading dashboard statistics...</div>;
 
@@ -35,9 +54,19 @@ export function Dashboard() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center bg-gray-50/50">
-          <ActivitySquare className="w-5 h-5 text-gray-500 mr-2" />
-          <h2 className="text-lg font-medium text-gray-900">Recent Command usages</h2>
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+          <div className="flex items-center">
+            <ActivitySquare className="w-5 h-5 text-gray-500 mr-2" />
+            <h2 className="text-lg font-medium text-gray-900">Recent Command usages</h2>
+          </div>
+          <button
+            onClick={handleCleanLogs}
+            disabled={cleaning}
+            className="inline-flex items-center px-3.5 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50 border border-red-200 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer select-none"
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+            {cleaning ? 'Cleaning Logs...' : 'Clean Command Usage Log'}
+          </button>
         </div>
         <div className="divide-y divide-gray-100">
           {stats.recentCommands && stats.recentCommands.length === 0 && (

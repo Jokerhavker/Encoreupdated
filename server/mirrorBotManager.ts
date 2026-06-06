@@ -1,5 +1,6 @@
 import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
+import mongoose from "mongoose";
 import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest } from "./db.js";
 import { isMemberOfChannel } from "./bot.js";
 
@@ -51,29 +52,62 @@ export function getBotIntegrationPointsLimit(plan: string): number {
 
 export async function checkAndResetIntegrationPoints(botDoc: any): Promise<boolean> {
   const currentMonth = currentMonthString();
-  let modified = false;
+  const ownerId = botDoc.ownerTelegramId;
+  if (!ownerId) {
+    return botDoc.isPointsExceeded || false;
+  }
 
-  if (botDoc.integrationPointsMonth !== currentMonth) {
-    botDoc.integrationPointsMonth = currentMonth;
-    botDoc.integrationPointsUsed = 0;
-    botDoc.isPointsExceeded = false;
-    modified = true;
+  // Find or create central usage record for this owner to share across all her/his active or recreation bots
+  const MirrorOwnerPoints = mongoose.models.MirrorOwnerPoints || mongoose.model('MirrorOwnerPoints', new mongoose.Schema({
+    ownerTelegramId: { type: String, required: true, unique: true },
+    integrationPointsUsed: { type: Number, default: 0 },
+    integrationPointsMonth: { type: String, default: "" }
+  }, { timestamps: true }), 'encore_mirror_owner_points');
+
+  let ownerPoints = await MirrorOwnerPoints.findOne({ ownerTelegramId: ownerId });
+  if (!ownerPoints) {
+    ownerPoints = await MirrorOwnerPoints.create({
+      ownerTelegramId: ownerId,
+      integrationPointsUsed: 0,
+      integrationPointsMonth: currentMonth
+    });
+  }
+
+  let ownerModified = false;
+  if (ownerPoints.integrationPointsMonth !== currentMonth) {
+    ownerPoints.integrationPointsMonth = currentMonth;
+    ownerPoints.integrationPointsUsed = 0;
+    ownerModified = true;
+  }
+
+  if (ownerModified) {
+    await ownerPoints.save();
   }
 
   const limit = getBotIntegrationPointsLimit(botDoc.plan);
-  if (botDoc.integrationPointsUsed >= limit && !botDoc.isPointsExceeded) {
-    botDoc.isPointsExceeded = true;
-    modified = true;
-  } else if (botDoc.integrationPointsUsed < limit && botDoc.isPointsExceeded) {
-    botDoc.isPointsExceeded = false;
-    modified = true;
+  let botModified = false;
+
+  if (botDoc.integrationPointsMonth !== currentMonth) {
+    botDoc.integrationPointsMonth = currentMonth;
+    botModified = true;
   }
 
-  if (modified) {
+  if (botDoc.integrationPointsUsed !== ownerPoints.integrationPointsUsed) {
+    botDoc.integrationPointsUsed = ownerPoints.integrationPointsUsed;
+    botModified = true;
+  }
+
+  const isExceeded = ownerPoints.integrationPointsUsed >= limit;
+  if (botDoc.isPointsExceeded !== isExceeded) {
+    botDoc.isPointsExceeded = isExceeded;
+    botModified = true;
+  }
+
+  if (botModified) {
     await botDoc.save();
   }
 
-  return botDoc.isPointsExceeded;
+  return isExceeded;
 }
 
 // Setup a mirrored bot dynamic event handlers
@@ -621,26 +655,26 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     console.error(`[Telegraf Error Handler] Error for bot token ${token.substring(0, 10)}...:`, err);
   });
 
-  // Async IIFE to set up webhook in production, or use long-polling in development
+  // Async IIFE to set up webhook, or use long-polling if local (localhost/127.0.0.1)
   (async () => {
     try {
       const appUrl = getAppUrl();
-      const isProduction = process.env.NODE_ENV === "production" && 
-                          appUrl && 
-                          appUrl.startsWith("http") && 
-                          !appUrl.includes("localhost") && 
-                          !appUrl.includes("ais-dev") && 
-                          !appUrl.includes("127.0.0.1");
+      const hasPublicUrl = appUrl && 
+                           appUrl.startsWith("https") && 
+                           !appUrl.includes("localhost") && 
+                           !appUrl.includes("127.0.0.1");
 
-      if (isProduction) {
+      if (hasPublicUrl) {
         const webhookUrl = `${appUrl}/api/telegram/webhook/mirror/${token}`;
-        console.log(`[Mirror Bot Manager] Production environment detected. Registering webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to ${webhookUrl}`);
+        console.log(`[Mirror Bot Manager] Public HTTPS environment detected. Registering Webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to: ${webhookUrl}`);
+        
+        // Telegram webhooks require https
         await bot.telegram.setWebhook(webhookUrl, {
           allowed_updates: ["message", "callback_query"],
           drop_pending_updates: true
         });
       } else {
-        console.log(`[Mirror Bot Manager] Development/Sandbox sandbox detected. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling (polling mode)...`);
+        console.log(`[Mirror Bot Manager] Local environment details. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling...`);
         await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
         bot.launch({
           allowedUpdates: ["message", "callback_query"],
@@ -700,25 +734,51 @@ export async function initializeAllMirrorBots() {
 
 // Execute logic matching bot.ts core Command Runner
 async function executeCommandCore(ctx: any, userCommand: string, param: string, cmdDef: any, replyOptions: any, mirrorBotDoc: any) {
-  // Increment Integration Points usage for this cloned bot
+  // Increment Integration Points usage for this cloned bot / owner
   try {
     const freshBotDoc = await MirrorBot.findOne({ token: mirrorBotDoc.token });
     if (freshBotDoc) {
       await checkAndResetIntegrationPoints(freshBotDoc);
       const pointsLimit = getBotIntegrationPointsLimit(freshBotDoc.plan);
-      if (freshBotDoc.integrationPointsUsed >= pointsLimit) {
-        freshBotDoc.isPointsExceeded = true;
+      const ownerId = freshBotDoc.ownerTelegramId;
+      if (ownerId) {
+        const MirrorOwnerPoints = mongoose.models.MirrorOwnerPoints || mongoose.model('MirrorOwnerPoints', new mongoose.Schema({
+          ownerTelegramId: { type: String, required: true, unique: true },
+          integrationPointsUsed: { type: Number, default: 0 },
+          integrationPointsMonth: { type: String, default: "" }
+        }, { timestamps: true }), 'encore_mirror_owner_points');
+
+        let ownerPoints = await MirrorOwnerPoints.findOne({ ownerTelegramId: ownerId });
+        if (!ownerPoints) {
+          ownerPoints = await MirrorOwnerPoints.create({
+            ownerTelegramId: ownerId,
+            integrationPointsUsed: 0,
+            integrationPointsMonth: currentMonthString()
+          });
+        }
+
+        if (ownerPoints.integrationPointsUsed >= pointsLimit) {
+          freshBotDoc.isPointsExceeded = true;
+          await freshBotDoc.save();
+          stopMirrorBot(freshBotDoc.token);
+          await ctx.reply(`⚠️ *Integration Points Exhausted* ⚠️\n\nThis cloned bot has used all of its monthly allowance of ${pointsLimit.toLocaleString()} Integration points. The bot has been suspended/stopped for the remainder of this month.\n\nPlease contact the bot owner to upgrade their subscription plan to unlock more Integration points!`, replyOptions);
+          return;
+        }
+
+        // Increment centrally
+        ownerPoints.integrationPointsUsed = (ownerPoints.integrationPointsUsed || 0) + 1;
+        await ownerPoints.save();
+
+        // Sync back to local bot document cached structure
+        freshBotDoc.integrationPointsUsed = ownerPoints.integrationPointsUsed;
+        if (freshBotDoc.integrationPointsUsed >= pointsLimit) {
+          freshBotDoc.isPointsExceeded = true;
+          stopMirrorBot(freshBotDoc.token);
+        } else {
+          freshBotDoc.isPointsExceeded = false;
+        }
         await freshBotDoc.save();
-        stopMirrorBot(freshBotDoc.token);
-        await ctx.reply(`⚠️ *Integration Points Exhausted* ⚠️\n\nThis cloned bot has used all of its monthly allowance of ${pointsLimit.toLocaleString()} Integration points. The bot has been suspended/stopped for the remainder of this month.\n\nPlease contact the bot owner to upgrade their subscription plan to unlock more Integration points!`, replyOptions);
-        return;
       }
-      freshBotDoc.integrationPointsUsed = (freshBotDoc.integrationPointsUsed || 0) + 1;
-      if (freshBotDoc.integrationPointsUsed >= pointsLimit) {
-        freshBotDoc.isPointsExceeded = true;
-        stopMirrorBot(freshBotDoc.token);
-      }
-      await freshBotDoc.save();
     }
   } catch (err: any) {
     console.error(`[Integration points increment error]`, err.message);
