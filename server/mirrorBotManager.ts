@@ -1,10 +1,52 @@
 import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
 import mongoose from "mongoose";
-import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest } from "./db.js";
+import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest, UsedTransaction, Coupon } from "./db.js";
 import { isMemberOfChannel } from "./bot.js";
 
 const activeMirroredBots = new Map<string, Telegraf>();
+
+// Global session state tracker for in-bot shop transactions across cloned bots
+const botShopStates = new Map<string, {
+  state: 'awaiting_credit_qty' | 'awaiting_utr' | 'awaiting_coupon';
+  type: 'sub' | 'credits';
+  productId: string; // tier ID or command name
+  amount: number;
+  creditsCount?: number;
+  couponCode?: string;
+  originalAmount?: number;
+}>();
+
+// Verify Fampay Payment using Gateway API mirroring bot.ts logic
+async function verifyFampayPayment(paymentId: string, amount: number) {
+  const cleanPaymentId = String(paymentId).trim();
+  let foundTxn: any = null;
+
+  try {
+    const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanPaymentId}`);
+    if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
+      foundTxn = utrRes.data.results.find((item: any) => {
+        const isSuccess = String(item.Payment).toLowerCase() === 'success';
+        const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+        return isSuccess && isAmountMatch;
+      });
+    }
+
+    if (!foundTxn) {
+      const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanPaymentId}`);
+      if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
+        foundTxn = idRes.data.results.find((item: any) => {
+          const isSuccess = String(item.Payment).toLowerCase() === 'success';
+          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+          return isSuccess && isAmountMatch;
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Fampay verification error in mirrorBotManager:", err);
+  }
+  return foundTxn;
+}
 
 // Get running instance or null
 export function getMirroredBotInstance(token: string): Telegraf | null {
@@ -407,7 +449,9 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     const keyboard = {
       inline_keyboard: [
         [{ text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }],
-        [{ text: "🤖 MAKE YOUR OWN BOT", url: `https://t.me/${mainBotUsername}` }],
+        [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" }],
+        [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" }],
+        [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` } }],
         [{ text: "🔙 Back to Start", callback_data: "view_start" }]
       ]
     };
@@ -441,6 +485,702 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     }
   };
 
+  // --- CLONED BOT IN-BOT BILLING & SHOP SYSTEM ---
+  const generateSubCheckoutMessage = async (ctx: any, userId: string, matchedTier: any, amount: number, couponCode?: string) => {
+    botShopStates.set(userId, {
+      state: 'awaiting_utr',
+      type: 'sub',
+      productId: matchedTier.id,
+      amount: amount,
+      couponCode: couponCode
+    });
+
+    const cleanName = `${matchedTier.name} Subscription`.replace(/[^a-zA-Z0-9]/g, ' ');
+    const upiString = `upi://pay?pa=alkhkumar@fam&pn=ENCORE_XOSINT_Shop&am=${amount}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiString)}`;
+
+    let couponText = "";
+    if (couponCode) {
+      couponText = `🎉 *Coupon Code Applied:* \`${couponCode}\`\n`;
+    }
+
+    const captionText = `🎫 *Subscription Checkout: ${matchedTier.name}*\n\n` +
+      couponText +
+      `💰 *Payable Amount:* ₹${amount} / month\n` +
+      `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+      `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* (Fampay/PhonePe/GPay) to instantly verify your purchase:\n\n` +
+      `Press cancel to terminate checkout:`;
+
+    try {
+      await ctx.replyWithPhoto({ url: qrCodeUrl }, {
+        caption: captionText,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+    } catch (err: any) {
+      await ctx.reply(captionText + `\n\n🖼️ [Payment QR Code](${qrCodeUrl})`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+    }
+  };
+
+  const handleCouponInput = async (ctx: any, userId: string, text: string) => {
+    const stateData = botShopStates.get(userId);
+    if (!stateData || stateData.state !== 'awaiting_coupon') return;
+
+    const codeEntered = text.trim().toUpperCase();
+    if (text.startsWith("/")) {
+      if (text === "/cancel" || text === "/shop" || text === "/start") {
+        botShopStates.delete(userId);
+        await ctx.reply("❌ Coupon entry canceled. Session terminated.");
+      } else {
+        await ctx.reply("⚠️ Invalid promo code. Send a code or click skip coupon to continue.");
+      }
+      return;
+    }
+
+    const coupon = await Coupon.findOne({ code: codeEntered });
+    const tierId = stateData.productId;
+
+    const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+    const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+    let matchedTier = tiers.find((t: any) => t.id === tierId);
+
+    if (!matchedTier && tierId === 'premium') {
+      const shopSettingsSetting = await Setting.findOne({ key: 'shopSettings' });
+      const shopSettings = shopSettingsSetting?.value || {};
+      matchedTier = {
+        id: 'premium',
+        name: 'Bot Paid Subscription',
+        price: shopSettings.premiumMonthlyPrice || 80,
+        discountPercent: shopSettings.premiumDiscountPercent || 15,
+        commands: [],
+      };
+    }
+
+    if (!matchedTier) {
+      botShopStates.delete(userId);
+      await ctx.reply("❌ Error: Plan details could not be found. Checkout canceled.");
+      return;
+    }
+
+    if (!coupon) {
+      await ctx.reply(`❌ *Invalid Coupon Code*\n\nWe couldn't find details for \`${codeEntered}\`.\n\nPlease type correctly, or click *Skip Coupon* below to checkout without a coupon code:`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⏭️ Skip Coupon", callback_data: "shop_skip_coupon" }],
+            [{ text: "❌ Cancel", callback_data: "shop_cancel_payment" }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (!coupon.isActive) {
+      await ctx.reply(`❌ *Coupon Inactive*\n\nThe promo code \`${codeEntered}\` has been deactivated.\n\nPlease try another code or click *Skip Coupon*:`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⏭️ Skip Coupon", callback_data: "shop_skip_coupon" }],
+            [{ text: "❌ Cancel", callback_data: "shop_cancel_payment" }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (coupon.usedCount >= coupon.maxUses) {
+      await ctx.reply(`❌ *Coupon Exhausted / Used Max Times*\n\nThe code \`${codeEntered}\` has already been fully redeemed.\n\nPlease try another code or click *Skip Coupon*:`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⏭️ Skip Coupon", callback_data: "shop_skip_coupon" }],
+            [{ text: "❌ Cancel", callback_data: "shop_cancel_payment" }]
+          ]
+        }
+      });
+      return;
+    }
+
+    if (coupon.tierId !== 'all' && coupon.tierId !== tierId) {
+      await ctx.reply(`❌ *Applicability Failure*\n\nThe promo code \`${codeEntered}\` is not valid for *${matchedTier.name}*.\n\nPlease try another code or click *Skip Coupon*:`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⏭️ Skip Coupon", callback_data: "shop_skip_coupon" }],
+            [{ text: "❌ Cancel", callback_data: "shop_cancel_payment" }]
+          ]
+        }
+      });
+      return;
+    }
+
+    const original = stateData.originalAmount ?? matchedTier.price;
+    const valDiscount = (original * coupon.discountPercent) / 100;
+    const discountedRate = Math.round((original - valDiscount) * 100) / 100;
+
+    await generateSubCheckoutMessage(ctx, userId, matchedTier, discountedRate, coupon.code);
+  };
+
+  const handleCreditsQtyInput = async (ctx: any, userId: string, text: string) => {
+    const stateData = botShopStates.get(userId);
+    if (!stateData || stateData.state !== 'awaiting_credit_qty' || stateData.type !== 'credits') return;
+
+    const qty = parseInt(text);
+    if (isNaN(qty) || qty <= 0) {
+      await ctx.reply("⚠️ *Invalid Quantity*\n\nPlease enter a valid positive integer number of credits (e.g. 50).");
+      return;
+    }
+
+    const cmd = await Command.findOne({ command: stateData.productId });
+    if (!cmd) {
+      botShopStates.delete(userId);
+      await ctx.reply("❌ This command credits package no longer exists in shop. Checkout canceled.");
+      return;
+    }
+
+    const minLimit = cmd.minPurchaseCredits || 10;
+    if (qty < minLimit) {
+      await ctx.reply(`⚠️ *Quantity too low*\n\nThe minimum purchase amount for this command is *${minLimit} credits*. Please try entering a higher number:`, {
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+      return;
+    }
+
+    const pricePer = cmd.pricePerCredit || 0.5;
+    const basePrice = qty * pricePer;
+
+    const user = await BotUser.findOne({ telegramId: userId });
+    let finalPrice = basePrice;
+    let discountPercent = 0;
+    let hasDiscount = false;
+
+    if (user && user.isPremium) {
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const subscriptionTiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+      const shopSettingsSetting = await Setting.findOne({ key: 'shopSettings' });
+      const shopSettings = shopSettingsSetting?.value || {};
+
+      if (user.premiumTier) {
+        const matchedTier = subscriptionTiers.find((t: any) => t.id === user.premiumTier);
+        discountPercent = matchedTier ? (matchedTier.discountPercent ?? (shopSettings.premiumDiscountPercent || 0)) : (shopSettings.premiumDiscountPercent || 0);
+      } else {
+        discountPercent = shopSettings.premiumDiscountPercent || 0;
+      }
+
+      if (discountPercent > 0) {
+        const discountAmount = (basePrice * discountPercent) / 100;
+        finalPrice = Math.round((basePrice - discountAmount) * 100) / 100;
+        hasDiscount = true;
+      }
+    }
+
+    botShopStates.set(userId, {
+      state: 'awaiting_utr',
+      type: 'credits',
+      productId: cmd.command,
+      amount: finalPrice,
+      creditsCount: qty
+    });
+
+    const cleanName = `${qty} credits for ${cmd.command}`.replace(/[^a-zA-Z0-9]/g, ' ');
+    const upiString = `upi://pay?pa=alkhkumar@fam&pn=ENCORE_XOSINT_Shop&am=${finalPrice}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiString)}`;
+
+    let discountInfo = "";
+    if (hasDiscount && discountPercent > 0) {
+      discountInfo = `🔥 *VIP Discount:* Flat ${discountPercent}% OFF applied!\n(Original Price: ₹${basePrice.toFixed(2)})\n\n`;
+    }
+
+    const captionText = `⚡ *Checkout: Credits for ${cmd.command}*\n\n` +
+      `📥 *Quantity:* ${qty} Credits\n` +
+      `💰 *Payable Amount:* ₹${finalPrice}\n` +
+      `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+      discountInfo +
+      `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* here to verify.`;
+
+    try {
+      await ctx.replyWithPhoto({ url: qrCodeUrl }, {
+        caption: captionText,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+    } catch (err: any) {
+      await ctx.reply(captionText + `\n\n🖼️ [Payment QR Code](${qrCodeUrl})`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+    }
+  };
+
+  const handleUtrVerificationInput = async (ctx: any, userId: string, text: string) => {
+    const stateData = botShopStates.get(userId);
+    if (!stateData || stateData.state !== 'awaiting_utr') return;
+
+    const paymentId = text.trim();
+    const amount = stateData.amount;
+    const productId = stateData.productId;
+
+    const waitMsg = await ctx.reply("🔍 *Verifying payment transaction...* Please wait up to 10 seconds...", { parse_mode: "Markdown" });
+
+    try {
+      const spentTxn = await UsedTransaction.findOne({ transactionId: paymentId });
+      if (spentTxn) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+        await ctx.reply("⚠️ *Already Used*\n\nThis transaction/UTR ID has already been verified and used in our shop before.", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+          }
+        });
+        return;
+      }
+
+      let foundTxn = await verifyFampayPayment(paymentId, amount);
+
+      if (!foundTxn) {
+        try {
+          const isSubscription = stateData.type === 'sub';
+          const userDoc = await BotUser.findOne({ telegramId: userId });
+          if (userDoc) {
+            userDoc.purchaseHistory.push({
+              productId,
+              productName: isSubscription ? `${productId} Subscription` : `Credits for ${productId}`,
+              price: Number(amount),
+              transactionId: paymentId,
+              utr: paymentId,
+              date: new Date(),
+              status: 'Failed'
+            });
+            await userDoc.save();
+          }
+        } catch (logErr) {}
+
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+        await ctx.reply(`⚠️ *Transaction Not Found*\n\nPayment transaction was not found on Fampay or the amount does not match *₹${amount}*.\n\nPlease check again and send correct ID or click cancel:`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+          }
+        });
+        return;
+      }
+
+      const finalUtr = foundTxn.utr || paymentId;
+      const finalTxnId = foundTxn.txn_id || paymentId;
+
+      const doubleSpentCheckUtr = await UsedTransaction.findOne({ transactionId: finalUtr });
+      const doubleSpentCheckTxn = await UsedTransaction.findOne({ transactionId: finalTxnId });
+      if (doubleSpentCheckUtr || doubleSpentCheckTxn) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+        await ctx.reply("⚠️ *Already Spent*\n\nThis payment transaction was already applied for another purchase. Checkout canceled.");
+        return;
+      }
+
+      if (finalUtr) {
+        await UsedTransaction.create({ transactionId: finalUtr, telegramId: userId, amount: Number(amount), type: productId });
+      }
+      if (finalTxnId && finalTxnId !== finalUtr) {
+        await UsedTransaction.create({ transactionId: finalTxnId, telegramId: userId, amount: Number(amount), type: productId });
+      }
+
+      const userDoc = await BotUser.findOne({ telegramId: userId });
+      if (!userDoc) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+        await ctx.reply("❌ Error: Profile not found. Please run /start and try again.");
+        botShopStates.delete(userId);
+        return;
+      }
+
+      let finalProductName = '';
+      const isSubscription = stateData.type === 'sub';
+
+      if (isSubscription) {
+        userDoc.isPremium = true;
+        userDoc.premiumTier = productId;
+        const currentExpiry = userDoc.premiumExpiresAt ? new Date(userDoc.premiumExpiresAt).getTime() : Date.now();
+        const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
+        userDoc.premiumExpiresAt = new Date(baseTime + 30 * 24 * 60 * 60 * 1000);
+
+        let tierName = 'Premium Membership';
+        const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+        if (tiersSetting && Array.isArray(tiersSetting.value)) {
+          const matched = tiersSetting.value.find((t: any) => t.id === productId);
+          if (matched) {
+            tierName = `${matched.name} Subscription`;
+            if (Array.isArray(matched.commands)) {
+              if (!userDoc.commonCredits) userDoc.commonCredits = new Map();
+              for (const cmdConfig of matched.commands) {
+                const bonusCredits = Number(cmdConfig.bonusCommonCredits || 0);
+                if (cmdConfig.command && bonusCredits > 0) {
+                  const currentCommon = userDoc.commonCredits.get(cmdConfig.command) || 0;
+                  userDoc.commonCredits.set(cmdConfig.command, currentCommon + bonusCredits);
+                }
+              }
+            }
+          }
+        }
+        finalProductName = tierName;
+      } else {
+        const creditsCount = stateData.creditsCount || 10;
+        if (!userDoc.commonCredits) userDoc.commonCredits = new Map();
+        const currentCommon = userDoc.commonCredits.get(productId) || 0;
+        userDoc.commonCredits.set(productId, currentCommon + creditsCount);
+        finalProductName = `${creditsCount} Credits for ${productId}`;
+      }
+
+      if (stateData.couponCode) {
+        try {
+          const coupon = await Coupon.findOne({ code: stateData.couponCode.toUpperCase() });
+          if (coupon) {
+            coupon.usedCount = (coupon.usedCount || 0) + 1;
+            await coupon.save();
+            finalProductName = `${finalProductName} (Coupon: ${coupon.code})`;
+          }
+        } catch (couponErr) {}
+      }
+
+      userDoc.purchaseHistory.push({
+        productId,
+        productName: finalProductName,
+        price: Number(amount),
+        transactionId: finalTxnId,
+        utr: finalUtr,
+        date: new Date(),
+        status: 'Success'
+      });
+      await userDoc.save();
+
+      // Credit commission to the host (mirror bot owner)
+      const thisMirrorDoc = await MirrorBot.findOne({ token });
+      if (thisMirrorDoc && thisMirrorDoc.botUsername) {
+        try {
+          await creditMirrorBotCommission(thisMirrorDoc.botUsername, Number(amount), finalProductName || productId);
+        } catch (commErr) {
+          console.error("Failed to credit commission inside mirror bot:", commErr);
+        }
+      }
+
+      botShopStates.delete(userId);
+      await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+      await ctx.reply(`🎉 *Purchase Successful!*\n\nYour payment of *₹${amount}* was verified.\n✅ *Product:* ${finalProductName}\n\nThank you for supporting us! Enjoy your purchase.`);
+    } catch (err: any) {
+      console.error(err);
+      await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+      await ctx.reply("❌ Error finalizing transaction. Please message support.");
+    }
+  };
+
+  // Register interactive in-bot shop Telegraf Action callbacks
+  bot.action("shop_sub_tier_menu", async (ctx) => {
+    try {
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+
+      let messageText = "🎫 *Purchase Bot Membership* 🎫\n\n" +
+        "Bypass all default daily search limits, unlock API commands in private chat, and gain a flat discount on credit purchase checkouts!\n\n" +
+        "Select a billing tier below to see plans and benefits:";
+
+      const subButtons = [];
+      for (const tier of tiers) {
+        subButtons.push([{
+          text: `👑 ${tier.name} - ₹${tier.price}/month`,
+          callback_data: `shop_sub_details:${tier.id}`
+        }]);
+      }
+
+      if (subButtons.length === 0) {
+        subButtons.push([{
+          text: "👑 Bot Premium (Monthly) - ₹80/month",
+          callback_data: "shop_sub_details:premium"
+        }]);
+      }
+
+      subButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
+
+      await ctx.editMessageText(messageText, {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: subButtons }
+      }).catch(() => {});
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (err: any) {
+      console.error(err);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading tiers").catch(() => ({}));
+    }
+  });
+
+  bot.action(/^shop_sub_details:(.+)$/, async (ctx) => {
+    try {
+      const tierId = ctx.match[1];
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+      
+      let matchedTier = tiers.find((t: any) => t.id === tierId);
+      
+      if (!matchedTier && tierId === 'premium') {
+        const shopSettingsSetting = await Setting.findOne({ key: 'shopSettings' });
+        const shopSettings = shopSettingsSetting?.value || {};
+        matchedTier = {
+          id: 'premium',
+          name: 'Bot Paid Subscription',
+          price: shopSettings.premiumMonthlyPrice || 80,
+          discountPercent: shopSettings.premiumDiscountPercent || 15,
+          commands: [],
+        };
+      }
+
+      if (!matchedTier) {
+        await ctx.answerCbQuery("Subscription tier not found.").catch(() => ({}));
+        return;
+      }
+
+      let perksText = "";
+      if (Array.isArray(matchedTier.commands) && matchedTier.commands.length > 0) {
+        perksText = "\n🎁 *Additional bonus credits granted with this plan:*\n";
+        matchedTier.commands.forEach((tc: any) => {
+          if (tc.bonusCommonCredits > 0) {
+            perksText += `• *+${tc.bonusCommonCredits}* common credits for \`${tc.command}\`\n`;
+          }
+        });
+      }
+
+      let messageText = `👑 *${matchedTier.name}* 👑\n\n` +
+        `💰 *Subscription billing rate:* ₹${matchedTier.price} per month\n` +
+        `🔥 *VIP Discount:* Flat *${matchedTier.discountPercent}% OFF* on all separate command credit packages!\n` +
+        perksText +
+        `\n*Membership Benefits:*\n` +
+        `• Bypasses all chat rate quotas.\n` +
+        `• Grants access to run high-speed API search commands on private chats.\n` +
+        `• Unlocks special status branding on your profile.\n\n` +
+        `Would you like to subscribe to this plan?`;
+
+      await ctx.editMessageText(messageText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "💳 BUY NOW", callback_data: `shop_sub_buy:${matchedTier.id}` },
+              { text: "🔙 BACK", callback_data: "shop_sub_tier_menu" }
+            ]
+          ]
+        }
+      }).catch(() => {});
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (e: any) {
+      console.error(e);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading details").catch(() => ({}));
+    }
+  });
+
+  bot.action(/^shop_sub_buy:(.+)$/, async (ctx) => {
+    try {
+      const tierId = ctx.match[1];
+      const userId = String(ctx.from?.id);
+
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+      let matchedTier = tiers.find((t: any) => t.id === tierId);
+
+      if (!matchedTier && tierId === 'premium') {
+        const shopSettingsSetting = await Setting.findOne({ key: 'shopSettings' });
+        const shopSettings = shopSettingsSetting?.value || {};
+        matchedTier = {
+          id: 'premium',
+          name: 'Bot Paid Subscription',
+          price: shopSettings.premiumMonthlyPrice || 80,
+          discountPercent: shopSettings.premiumDiscountPercent || 15,
+          commands: [],
+        };
+      }
+
+      if (!matchedTier) {
+        await ctx.answerCbQuery("Plan not found.").catch(() => ({}));
+        return;
+      }
+
+      const originalAmount = matchedTier.price;
+
+      botShopStates.set(userId, {
+        state: 'awaiting_coupon',
+        type: 'sub',
+        productId: matchedTier.id,
+        amount: originalAmount,
+        originalAmount: originalAmount
+      });
+
+      const promptText = `🎫 *Subscription Checkout: ${matchedTier.name}*\n\n` +
+        `💰 *Original Price:* ₹${originalAmount}\n\n` +
+        `Do you have a *promo code / coupon code* for a discount?\n\n` +
+        `👉 If yes, please **type and send the coupon code** right now in chat (e.g. *WELCOME50*).\n` +
+        `👉 If no, please click *Skip Coupon* below to proceed directly with original pricing.`;
+
+      if (ctx.callbackQuery && ctx.callbackQuery.message) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id).catch(() => {});
+      }
+
+      await ctx.reply(promptText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⏭️ Skip Coupon", callback_data: "shop_skip_coupon" }],
+            [{ text: "❌ Cancel", callback_data: "shop_cancel_payment" }]
+          ]
+        }
+      });
+
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (e: any) {
+      console.error(e);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error initiating checkout").catch(() => ({}));
+    }
+  });
+
+  bot.action("shop_skip_coupon", async (ctx) => {
+    try {
+      const userId = String(ctx.from?.id);
+      const stateData = botShopStates.get(userId);
+
+      if (!stateData || stateData.state !== 'awaiting_coupon') {
+        await ctx.answerCbQuery("Checkout expired or invalid session.").catch(() => ({}));
+        return;
+      }
+
+      const tierId = stateData.productId;
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+      let matchedTier = tiers.find((t: any) => t.id === tierId);
+
+      if (!matchedTier && tierId === 'premium') {
+        const shopSettingsSetting = await Setting.findOne({ key: 'shopSettings' });
+        const shopSettings = shopSettingsSetting?.value || {};
+        matchedTier = {
+          id: 'premium',
+          name: 'Bot Paid Subscription',
+          price: shopSettings.premiumMonthlyPrice || 80,
+          discountPercent: shopSettings.premiumDiscountPercent || 15,
+          commands: [],
+        };
+      }
+
+      if (!matchedTier) {
+        await ctx.reply("❌ Error: Subscription tier not found.");
+        botShopStates.delete(userId);
+        return;
+      }
+
+      if (ctx.callbackQuery && ctx.callbackQuery.message) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id).catch(() => {});
+      }
+
+      await generateSubCheckoutMessage(ctx, userId, matchedTier, stateData.originalAmount || matchedTier.price);
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (err) {
+      console.error(err);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Checkout error").catch(() => ({}));
+    }
+  });
+
+  bot.action("shop_credits_menu", async (ctx) => {
+    try {
+      const sellableCommands = await Command.find({ isForSale: true });
+
+      let messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
+        "Purchase custom credit counts to power individual API integration search commands. Standard unit rates apply.\n\n" +
+        "Select a command bundle below to see details and pricing:";
+
+      const credButtons = [];
+      for (const cmd of sellableCommands) {
+        credButtons.push([{
+          text: `🔑 ${cmd.command} (₹${cmd.pricePerCredit || 0.5}/credit)`,
+          callback_data: `shop_credit_details:${cmd.command}`
+        }]);
+      }
+
+      if (credButtons.length === 0) {
+        messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
+          "No separate command credit packages are currently configured/published in the shop. Check again later!";
+      }
+
+      credButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
+
+      await ctx.editMessageText(messageText, {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: credButtons }
+      }).catch(() => {});
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (e: any) {
+      console.error(e);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading credit packs").catch(() => ({}));
+    }
+  });
+
+  bot.action(/^shop_credit_details:(.+)$/, async (ctx) => {
+    try {
+      const cmdName = ctx.match[1];
+      const cmd = await Command.findOne({ command: cmdName });
+
+      if (!cmd) {
+        await ctx.answerCbQuery("Command pack not found.").catch(() => ({}));
+        return;
+      }
+
+      const minLimit = cmd.minPurchaseCredits || 10;
+      const pricePer = cmd.pricePerCredit || 0.5;
+
+      let messageText = `⚡ *Credits Pack Details for ${cmd.command}* ⚡\n\n` +
+        `📝 *Usage:* ${cmd.description || 'Allows running API lookup queries'}\n` +
+        `💰 *Standard Rate:* ₹${pricePer} / Credit\n` +
+        `📥 *Minimum Order Limit:* ${minLimit} Credits\n\n` +
+        `Please send me the **number of credits** you want to buy. It must be at least *${minLimit}*:\n` +
+        `_(Type any positive integer number and click send)_`;
+
+      const userId = String(ctx.from?.id);
+      botShopStates.set(userId, {
+        state: 'awaiting_credit_qty',
+        type: 'credits',
+        productId: cmd.command,
+        amount: 0
+      });
+
+      if (ctx.callbackQuery && ctx.callbackQuery.message) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id).catch(() => {});
+      }
+
+      await ctx.reply(messageText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "❌ Cancel Checkout", callback_data: "shop_cancel_payment" }]]
+        }
+      });
+
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (err) {
+      console.error(err);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Checkout error").catch(() => ({}));
+    }
+  });
+
+  bot.action("shop_cancel_payment", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    botShopStates.delete(userId);
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id).catch(() => {});
+    }
+    await ctx.reply("❌ Payment checkout canceled. Returning to shop menu...");
+    await showMirrorShop(ctx);
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
   bot.action("view_help", showMirrorHelp);
   bot.action("view_profile", showMirrorProfile);
   bot.action("view_shop", showMirrorShop);
@@ -449,6 +1189,36 @@ export async function startMirrorBot(mirrorBotDoc: any) {
   // 2. Incoming text messages router
   bot.on("text", async (ctx) => {
     const text = ctx.message.text.trim();
+    const userId = String(ctx.from?.id);
+
+    // Filter active checkout/payment state sessions
+    const userState = botShopStates.get(userId);
+    if (userState) {
+      if (userState.state === 'awaiting_credit_qty') {
+        await handleCreditsQtyInput(ctx, userId, text);
+        return;
+      } else if (userState.state === 'awaiting_coupon') {
+        await handleCouponInput(ctx, userId, text);
+        return;
+      } else if (userState.state === 'awaiting_utr') {
+        if (text.startsWith("/")) {
+          if (text === "/shop" || text === "/start" || text === "/cancel") {
+            botShopStates.delete(userId);
+            if (text === "/cancel") {
+              await ctx.reply("❌ Payment checkout canceled. You can open the shop again using /shop.");
+              return;
+            }
+          } else {
+            await ctx.reply("⚠️ You have a pending payment checkout. Please send your payment UTR / Transaction ID or cancel it using the Cancel button or typing /cancel.");
+            return;
+          }
+        } else {
+          await handleUtrVerificationInput(ctx, userId, text);
+          return;
+        }
+      }
+    }
+
     if (!text.startsWith("/")) return;
 
     try {

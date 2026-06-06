@@ -11,6 +11,13 @@ import {
   Coupon,
 } from "./db.js";
 
+// Helper to resolve active preview/prod domain dynamically
+export function getAppUrl(): string {
+  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+  return process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";
+}
+
 // Global map to track user purchase/checkout state
 const botShopStates = new Map<string, {
   state: 'awaiting_credit_qty' | 'awaiting_utr' | 'awaiting_coupon';
@@ -82,12 +89,7 @@ async function showBotShopMenu(ctx: any) {
     return;
   }
 
-  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-  const appUrl = vercelUrl
-    ? `https://${vercelUrl}`
-    : process.env.VITE_APP_URL ||
-      process.env.APP_URL ||
-      "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+  const appUrl = getAppUrl();
   const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
 
   const messageText = `🛍️ *ENCORE XOSINT Bot Shop* 🛍️\n\n` +
@@ -1371,13 +1373,7 @@ export async function initializeBot() {
       }
 
       // If this is from a callback edit message, otherwise reply
-      const vercelUrl =
-        process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-      const appUrl = vercelUrl
-        ? `https://${vercelUrl}`
-        : process.env.VITE_APP_URL ||
-          process.env.APP_URL ||
-          "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+      const appUrl = getAppUrl();
 
       const earnButton = {
         text: "💸 Earn ENC",
@@ -1549,12 +1545,7 @@ export async function initializeBot() {
       const isGroup =
         ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
       if (!isGroup) {
-        const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-        const appUrl = vercelUrl
-          ? `https://${vercelUrl}`
-          : process.env.VITE_APP_URL ||
-            process.env.APP_URL ||
-            "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+        const appUrl = getAppUrl();
         const markup = {
           inline_keyboard: [
             [{ text: "👤 My Profile", callback_data: "view_profile", style: "success" } as any],
@@ -1938,14 +1929,7 @@ export async function initializeBot() {
           ctx.chat.type === "group" || ctx.chat.type === "supergroup";
         if (!isGroup) {
           if (param && param.startsWith("earn")) {
-            const vercelUrl =
-              process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-              process.env.VERCEL_URL;
-            const appUrl = vercelUrl
-              ? `https://${vercelUrl}`
-              : process.env.VITE_APP_URL ||
-                process.env.APP_URL ||
-                "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+            const appUrl = getAppUrl();
             const earnUrl = `${appUrl}/rewards?userid=${ctx.from?.id || ""}`;
 
             await ctx.reply(
@@ -1969,14 +1953,7 @@ export async function initializeBot() {
           }
 
           if (param && param.startsWith("shop")) {
-            const vercelUrl =
-              process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-              process.env.VERCEL_URL;
-            const appUrl = vercelUrl
-              ? `https://${vercelUrl}`
-              : process.env.VITE_APP_URL ||
-                process.env.APP_URL ||
-                "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+            const appUrl = getAppUrl();
             const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
 
             await ctx.reply(
@@ -1999,14 +1976,7 @@ export async function initializeBot() {
             return;
           }
 
-          const vercelUrl =
-            process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-            process.env.VERCEL_URL;
-          const appUrl = vercelUrl
-            ? `https://${vercelUrl}`
-            : process.env.VITE_APP_URL ||
-              process.env.APP_URL ||
-              "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+          const appUrl = getAppUrl();
           const mirrorsUrl = `${appUrl}/mirrors?userid=${ctx.from?.id || ""}`;
 
           await ctx.reply(
@@ -2257,14 +2227,7 @@ export async function initializeBot() {
           if (!isAllowed) {
             console.log(`[Bot Text Handler] Logic block rejection (Requirement 3): Non-premium user ID ${ctx.from?.id} requested API command "${userCommand}" in private chat.`);
             
-            const vercelUrl =
-              process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-              process.env.VERCEL_URL;
-            const appUrl = vercelUrl
-              ? `https://${vercelUrl}`
-              : process.env.VITE_APP_URL ||
-                process.env.APP_URL ||
-                "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+            const appUrl = getAppUrl();
             const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
 
             await ctx.reply(
@@ -2368,14 +2331,7 @@ export async function initializeBot() {
               }
 
               // Dynamic webapp URL configuration
-              const vercelUrl =
-                process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-                process.env.VERCEL_URL;
-              const appUrl = vercelUrl
-                ? `https://${vercelUrl}`
-                : process.env.VITE_APP_URL ||
-                  process.env.APP_URL ||
-                  "https://ais-dev-nh3m4uaffie5jdqua3dnlj-590981446212.asia-southeast1.run.app";
+              const appUrl = getAppUrl();
               const earnUrl = `${appUrl}/rewards?userid=${ctx.from?.id || ""}`;
 
               const limitText = `⚠️ *Daily Limit Reached*\n\nSorry ${userMention}, you have used all your daily credits (${limit}/${limit}) and common credits for this command. Please wait for tomorrow or increase your credits.`;

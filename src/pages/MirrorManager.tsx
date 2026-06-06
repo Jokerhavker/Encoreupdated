@@ -1117,6 +1117,16 @@ export function MirrorManager() {
                       {activePlan === 'max' ? '1.5M Integration Points / month' : ''}
                     </p>
                   </div>
+
+                  <div className="p-3.5 bg-gray-50 rounded-lg space-y-1">
+                    <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">Referral Sales Commission</p>
+                    <p className="font-extrabold text-indigo-900">
+                      {activePlan === 'free' ? '💰 20% Commission' : ''}
+                      {activePlan === 'silver' ? '💰 35% Commission' : ''}
+                      {activePlan === 'gold' ? '💰 50% Commission' : ''}
+                      {activePlan === 'max' ? '💰 50% Commission' : ''}
+                    </p>
+                  </div>
                 </div>
               </div>
 
