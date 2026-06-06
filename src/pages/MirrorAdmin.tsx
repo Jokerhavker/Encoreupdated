@@ -70,8 +70,17 @@ export function MirrorAdmin() {
   const [bcTargetPlan, setBcTargetPlan] = useState('all');
   const [bcStatus, setBcStatus] = useState({ sending: false, success: 0, failed: 0 });
 
+  // Withdrawal Requests States
+  const [withdrawalRequests, setWithdrawalRequests] = useState<any[]>([]);
+  const [withdrawListLoading, setWithdrawListLoading] = useState(false);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [actionScreenshot, setActionScreenshot] = useState('');
+  const [rejectionComment, setRejectionComment] = useState('');
+  const [showProcessModal, setShowProcessModal] = useState<any | null>(null);
+
   const loadData = async () => {
     setLoading(true);
+    setWithdrawListLoading(true);
     setErrorMsg('');
     try {
       const res = await axios.get('/api/admin/mirror-bots');
@@ -84,10 +93,40 @@ export function MirrorAdmin() {
 
       const cmdRes = await axios.get('/api/commands');
       setAllCommands(cmdRes.data || []);
+
+      const wrRes = await axios.get('/api/mirror-bots/withdrawal-requests');
+      if (wrRes.data.success) {
+        setWithdrawalRequests(wrRes.data.requests || []);
+      }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.error || err.message || 'Error occurred connecting to administration API');
     } finally {
       setLoading(false);
+      setWithdrawListLoading(false);
+    }
+  };
+
+  const handleProcessWithdrawal = async (id: string, status: 'Paid' | 'Rejected') => {
+    setProcessingId(id);
+    try {
+      const res = await axios.post(`/api/mirror-bots/withdrawal-requests/${id}/action`, {
+        status,
+        screenshotUrl: status === 'Paid' ? actionScreenshot : undefined,
+        rejectionReason: status === 'Rejected' ? rejectionComment : undefined
+      });
+      if (res.data.success) {
+        setSuccessMsg(`Withdrawal request marked ${status} successfully!`);
+        setShowProcessModal(null);
+        setActionScreenshot('');
+        setRejectionComment('');
+        loadData();
+      } else {
+        setErrorMsg(`Failed marking withdrawal request as ${status}`);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.error || err.message || 'Error processing payment action');
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -881,6 +920,181 @@ export function MirrorAdmin() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Mirror Bot Owner Payout & Withdrawal Requests Control Ledger */}
+      <div className="bg-white rounded-2xl border border-gray-150 shadow-xs p-6 space-y-6">
+        <div>
+          <h2 className="text-sm font-black text-gray-900 flex items-center gap-1.5 uppercase">
+            <DollarSign className="w-5 h-5 text-indigo-600" /> Mirror Owner Withdrawal Requests Logs ({withdrawalRequests.filter(w => w.status === 'Pending').length} Pending)
+          </h2>
+          <p className="text-[11px] text-gray-500 mt-1">View, track, pay manually via UPI, and mark owner commission payout requests settled with image screens/receipt logs.</p>
+        </div>
+
+        {withdrawListLoading ? (
+          <div className="h-28 flex items-center justify-center text-xs font-bold text-gray-400 uppercase">
+            Synchronizing pending payout queues ...
+          </div>
+        ) : withdrawalRequests.length === 0 ? (
+          <div className="h-32 flex flex-col items-center justify-center border border-dashed rounded-2xl bg-gray-50/50 text-gray-400">
+            <DollarSign className="w-8 h-8 text-gray-300 stroke-1 mb-1.5" />
+            <p className="text-xs font-semibold">No withdrawal requests found in database.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-gray-150 text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+                  <th className="p-3">OWNER ID / USERNAME</th>
+                  <th className="p-3">BHIM UPI ID Destination</th>
+                  <th className="p-3 text-center">PAYOUT AMOUNT</th>
+                  <th className="p-3">SUBMITTED ON</th>
+                  <th className="p-3 text-center">PAYMENT STATE</th>
+                  <th className="p-3 text-center">ACTION CONTROLS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-150">
+                {withdrawalRequests.map((req) => (
+                  <tr key={req._id} className="hover:bg-slate-50/50 transition">
+                    <td className="p-3 space-y-0.5">
+                      <p className="font-bold text-gray-900">{req.ownerUsername || 'Mirror Owner'}</p>
+                      <p className="text-[9px] text-gray-400 font-mono">TG ID: {req.ownerTelegramId}</p>
+                    </td>
+                    <td className="p-3 select-all font-mono font-bold text-indigo-900">
+                      {req.upiId}
+                    </td>
+                    <td className="p-3 text-center font-mono font-black text-rose-600 text-[13px]">
+                      ₹{req.amount}
+                    </td>
+                    <td className="p-3 text-gray-500 font-mono text-[10px]">
+                      {new Date(req.createdAt).toLocaleString()}
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className={`px-2.5 py-0.5 rounded-full border text-[9px] font-bold uppercase
+                        ${req.status === 'Pending' ? 'bg-amber-50 text-amber-800 border-amber-200' : ''}
+                        ${req.status === 'Paid' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : ''}
+                        ${req.status === 'Rejected' ? 'bg-rose-50 text-rose-800 border-rose-200' : ''}
+                      `}>
+                        {req.status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      {req.status === 'Pending' ? (
+                        <button
+                          onClick={() => setShowProcessModal(req)}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-1 px-3 rounded-lg text-[10px] cursor-pointer"
+                        >
+                          Process Payout
+                        </button>
+                      ) : req.status === 'Paid' ? (
+                        req.screenshotUrl ? (
+                          <a
+                            href={req.screenshotUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-indigo-500 font-bold hover:underline"
+                          >
+                            View Receipt 🔗
+                          </a>
+                        ) : (
+                          <span className="text-gray-400 italic text-[10px]">Manual Transfer</span>
+                        )
+                      ) : (
+                        <span className="text-gray-400 text-[10px] block truncate max-w-[150px]" title={req.rejectionReason}>
+                          Reason: {req.rejectionReason}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Process Payout Action Modal overlay */}
+      {showProcessModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 font-sans">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl relative overflow-hidden border border-gray-150 space-y-4">
+            <h3 className="text-sm font-extrabold text-gray-900 border-b pb-3 uppercase flex items-center gap-1">
+              <DollarSign className="w-4 h-4 text-emerald-600" /> Process Manual Payout
+            </h3>
+
+            <div className="space-y-2 text-xs text-gray-700 bg-slate-50 p-3.5 rounded-xl border font-medium">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Owner User:</span>
+                <span className="font-bold text-gray-900">{showProcessModal.ownerUsername || 'Mirror Owner'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Telegram Client ID:</span>
+                <span className="font-mono font-bold text-gray-900">{showProcessModal.ownerTelegramId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400 flex items-center gap-0.5">UPI ID Source (VPA):</span>
+                <span className="font-mono font-bold text-indigo-900 bg-indigo-50 px-1 rounded select-all">{showProcessModal.upiId}</span>
+              </div>
+              <div className="flex justify-between items-center border-t pt-2 mt-2">
+                <span className="text-gray-400 font-bold">Transfer Amount:</span>
+                <span className="font-mono font-black text-rose-600 text-lg">₹{showProcessModal.amount}</span>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 text-xs font-semibold">
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-gray-500">Manual Payment Screenshot URL (Optional)</label>
+                <input 
+                  type="text"
+                  placeholder="Paste URL or transaction screenshot reference link"
+                  value={actionScreenshot}
+                  onChange={(e) => setActionScreenshot(e.target.value)}
+                  className="w-full border rounded-lg p-2 font-mono text-xs focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-gray-500">Rejection Reason (Strictly/Only required for rejections)</label>
+                <input 
+                  type="text"
+                  placeholder="e.g. Invalid UPI Id / Suspicious traffic"
+                  value={rejectionComment}
+                  onChange={(e) => setRejectionComment(e.target.value)}
+                  className="w-full border rounded-lg p-2 text-xs focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2 justify-end border-t text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProcessModal(null);
+                  setActionScreenshot('');
+                  setRejectionComment('');
+                }}
+                className="bg-white border hover:bg-slate-50 text-gray-600 p-2 px-4 rounded-xl cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={processingId !== null}
+                onClick={() => handleProcessWithdrawal(showProcessModal._id, 'Rejected')}
+                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 p-2 px-4 rounded-xl cursor-pointer"
+              >
+                Reject Request
+              </button>
+              <button
+                type="button"
+                disabled={processingId !== null}
+                onClick={() => handleProcessWithdrawal(showProcessModal._id, 'Paid')}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white p-2 px-5 rounded-xl cursor-pointer flex items-center gap-1"
+              >
+                {processingId ? 'Processing...' : 'Mark as PAID'}
+              </button>
+            </div>
           </div>
         </div>
       )}

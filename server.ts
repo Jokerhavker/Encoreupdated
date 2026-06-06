@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 import { connectDB } from './server/db.js';
 import { getBot, initializeBot } from './server/bot.js';
 import { apiRouter } from './server/api.js';
-import { initializeAllMirrorBots } from './server/mirrorBotManager.js';
+import { initializeAllMirrorBots, handleMirrorBotWebhook } from './server/mirrorBotManager.js';
 
 async function startServer() {
   await connectDB();
@@ -43,6 +43,15 @@ async function startServer() {
       });
     });
   }
+
+  // Webhook for Mirror Bots
+  app.post('/api/telegram/webhook/mirror/:token', (req, res) => {
+    const { token } = req.params;
+    handleMirrorBotWebhook(token, req.body, res).catch((err: any) => {
+      console.error(`[Webhook Update Error] Mirror Bot token ${token ? token.substring(0, 10) : ''}... Error:`, err);
+      if (!res.headersSent) res.sendStatus(200);
+    });
+  });
 
   // Use separated API routes
   app.use(apiRouter);

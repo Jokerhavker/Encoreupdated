@@ -1,6 +1,6 @@
 import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
-import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB } from "./db.js";
+import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest } from "./db.js";
 import { isMemberOfChannel } from "./bot.js";
 
 const activeMirroredBots = new Map<string, Telegraf>();
@@ -621,20 +621,39 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     console.error(`[Telegraf Error Handler] Error for bot token ${token.substring(0, 10)}...:`, err);
   });
 
-  // Async IIFE to delete existing webhook and drop any pending queue updates
+  // Async IIFE to set up webhook or fallback to long-polling
   (async () => {
     try {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+      const appUrl = getAppUrl();
+      if (appUrl && appUrl.startsWith('http')) {
+        const webhookUrl = `${appUrl}/api/telegram/webhook/mirror/${token}`;
+        console.log(`[Mirror Bot Webhook] Registering webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to ${webhookUrl}`);
+        await bot.telegram.setWebhook(webhookUrl, {
+          allowed_updates: ["message", "callback_query"],
+          drop_pending_updates: true
+        });
+      } else {
+        console.warn(`[Mirror Bot Manager] Invalid or empty APP_URL, falling back to long-polling.`);
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+        bot.launch({
+          allowedUpdates: ["message", "callback_query"],
+          dropPendingUpdates: true,
+        }).catch((err: any) => {
+          console.error(`Failed launching mirrored bot token fallback: ${token}`, err.message);
+        });
+      }
     } catch (e: any) {
-      console.warn(`[Telegraf] Optional webhook delete fail for mirror bot:`, e.message);
+      console.error(`[Mirror Bot Webhook Register Fail] Falling back to polling:`, e.message);
+      try {
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+        bot.launch({
+          allowedUpdates: ["message", "callback_query"],
+          dropPendingUpdates: true,
+        }).catch((err: any) => {
+          console.error(`Failed launching mirrored bot token: ${token}`, err.message);
+        });
+      } catch (err) {}
     }
-    
-    bot.launch({
-      allowedUpdates: ["message", "callback_query"],
-      dropPendingUpdates: true,
-    }).catch((err: any) => {
-      console.error(`Failed launching mirrored bot token: ${token}`, err.message);
-    });
   })();
   
   activeMirroredBots.set(token, bot);
@@ -879,5 +898,91 @@ async function executeCommandCore(ctx: any, userCommand: string, param: string, 
         await ctx.telegram.deleteMessage(ctx.chat.id, sentMsg.message_id);
       } catch (e) {}
     }, cmdDef.autoDeleteMs * 1000);
+  }
+}
+
+export function getAppUrl(): string {
+  const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+  return process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";
+}
+
+export async function handleMirrorBotWebhook(token: string, update: any, res: any) {
+  try {
+    let bot = activeMirroredBots.get(token);
+    if (!bot) {
+      const botDoc = await MirrorBot.findOne({ token, isActive: true });
+      if (!botDoc) {
+        console.log(`[Mirror Bot Webhook] Incoming update for non-existent or inactive bot.`);
+        return res.sendStatus(200);
+      }
+      const isExceeded = await checkAndResetIntegrationPoints(botDoc);
+      if (isExceeded) {
+        console.log(`[Mirror Bot Webhook] Bot has exceeded integration points, skipping update.`);
+        return res.sendStatus(200);
+      }
+      bot = await startMirrorBot(botDoc);
+    }
+
+    if (bot) {
+      await bot.handleUpdate(update, res);
+    } else {
+      res.sendStatus(200);
+    }
+  } catch (err: any) {
+    console.error(`[Mirror Bot Webhook Handler Error] Token: ${token.substring(0, 10)}... Error:`, err.message);
+    if (!res.headersSent) {
+      res.sendStatus(200); // return 200 to prevent retry storms
+    }
+  }
+}
+
+export async function creditMirrorBotCommission(botRefUsername: string, purchaseAmount: number, description: string) {
+  try {
+    if (!botRefUsername) return;
+    
+    // Normalize username
+    const normalizedUsername = botRefUsername.trim().replace("@", "");
+    const botDoc = await MirrorBot.findOne({ 
+      $or: [
+        { botUsername: normalizedUsername },
+        { botUsername: "@" + normalizedUsername }
+      ]
+    });
+    
+    if (!botDoc) {
+      console.log(`[Commission Engine] No mirror bot found for ref: ${botRefUsername}`);
+      return;
+    }
+    
+    const plan = botDoc.plan || 'free';
+    let pct = 0.20; // free limit
+    if (plan === 'silver') pct = 0.35;
+    else if (plan === 'gold') pct = 0.50;
+    else if (plan === 'max') pct = 0.70;
+    
+    const commissionEarned = Math.round(purchaseAmount * pct * 100) / 100;
+    if (commissionEarned <= 0) return;
+    
+    console.log(`[Commission Engine] Crediting ${commissionEarned} (₹${purchaseAmount} * ${pct * 100}%) to owner ${botDoc.ownerTelegramId} of bot @${botDoc.botUsername} [Plan: ${plan.toUpperCase()}]`);
+    
+    let wallet = await MirrorWallet.findOne({ ownerTelegramId: botDoc.ownerTelegramId });
+    if (!wallet) {
+      wallet = await MirrorWallet.create({ ownerTelegramId: botDoc.ownerTelegramId });
+    }
+    
+    wallet.balance = (wallet.balance || 0) + commissionEarned;
+    wallet.totalEarned = (wallet.totalEarned || 0) + commissionEarned;
+    wallet.history.push({
+      type: 'earning',
+      amount: commissionEarned,
+      description: `Commission earning (${Math.round(pct * 100)}%) from purchase through your cloned bot @${botDoc.botUsername}: ${description}`,
+      status: 'N/A',
+      date: new Date()
+    });
+    
+    await wallet.save();
+  } catch (err: any) {
+    console.error("[Commission Engine Error]", err.message);
   }
 }

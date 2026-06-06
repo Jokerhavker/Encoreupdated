@@ -3,7 +3,8 @@ import axios from 'axios';
 import { 
   Bot, Key, Shield, Radio, Plus, Trash2, Edit3, 
   CheckCircle2, Ban, Users, Settings, Award, 
-  AlertTriangle, Zap, ExternalLink, RefreshCw, XCircle, ListFilter
+  AlertTriangle, Zap, ExternalLink, RefreshCw, XCircle, ListFilter,
+  Wallet, Clock, Landmark, Coins
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -20,13 +21,24 @@ export function MirrorManager() {
   const [botDetail, setBotDetail] = useState<any>(null);
   const [botStats, setBotStats] = useState<any>({ totalUsers: 0, totalGroups: 0 });
   const [ownedBots, setOwnedBots] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'users_groups' | 'shop' | 'broadcast'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'users_groups' | 'shop' | 'broadcast' | 'wallet'>('overview');
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Wallet / Earning States
+  const [wallet, setWallet] = useState<any>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [upiId, setUpiId] = useState('');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawSuccess, setWithdrawSuccess] = useState<string | null>(null);
+  const [withdrawLoading, setWithdrawLoading] = useState(false);
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    if (containerRef.current) {
-      containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (canvasRef.current) {
+      canvasRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [activeTab]);
 
@@ -154,12 +166,78 @@ export function MirrorManager() {
     }
   };
 
+  // Fetch owner's wallet details & history
+  const fetchWallet = async (ownerId: string) => {
+    if (!ownerId) return;
+    setWalletLoading(true);
+    try {
+      const res = await axios.get(`/api/mirror-bots/wallet?ownerTelegramId=${ownerId}`);
+      if (res.data?.success) {
+        setWallet(res.data.wallet);
+      }
+    } catch (err) {
+      console.error("Error loading wallet details", err);
+    } finally {
+      setWalletLoading(false);
+    }
+  };
+
+  // Submit withdrawal request
+  const handleWithdrawSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!upiId.trim() || !withdrawAmount.trim()) {
+      setWithdrawError("Please provide both a valid UPI ID and a withdrawal amount.");
+      return;
+    }
+
+    const amt = Number(withdrawAmount);
+    if (isNaN(amt) || amt < 100) {
+      setWithdrawError("Minimum withdrawal amount is ₹100.");
+      return;
+    }
+
+    if (!wallet || wallet.balance < amt) {
+      setWithdrawError("Insufficient wallet balance.");
+      return;
+    }
+
+    setWithdrawLoading(true);
+    setWithdrawError(null);
+    setWithdrawSuccess(null);
+
+    try {
+      const res = await axios.post('/api/mirror-bots/withdraw', {
+        ownerTelegramId: botDetail?.ownerTelegramId,
+        ownerUsername: botDetail?.botUsername || '',
+        amount: amt,
+        upiId: upiId.trim()
+      });
+
+      if (res.data?.success) {
+        setWithdrawSuccess(`Withdrawal request for ₹${amt} submitted successfully! Wait for administrator payment approval.`);
+        setWithdrawAmount('');
+        // Refresh wallet state
+        setWallet(res.data.wallet);
+      }
+    } catch (err: any) {
+      setWithdrawError(err.response?.data?.error || "Failed submitting withdrawal request. Try again.");
+    } finally {
+      setWithdrawLoading(false);
+    }
+  };
+
   // Sync users/groups whenever searching or active tabulated view changes
   useEffect(() => {
     if (isAuthenticated && token && activeTab === 'users_groups') {
       fetchUsersAndGroups(token, ugSearchQuery);
     }
   }, [activeTab, ugSearchQuery, isAuthenticated, token]);
+
+  useEffect(() => {
+    if (isAuthenticated && botDetail?.ownerTelegramId && activeTab === 'wallet') {
+      fetchWallet(botDetail.ownerTelegramId);
+    }
+  }, [activeTab, isAuthenticated, botDetail]);
 
   // Handle saving specific user command credits
   const handleSaveUserCredits = async () => {
@@ -798,12 +876,21 @@ export function MirrorManager() {
             Gain privileged access to command overrides, customizable API endpoints, unlimited broadcasts, and multiple forced join channels.
           </p>
         </div>
-        <button
-          onClick={() => setActiveTab('shop')}
-          className="bg-white text-indigo-600 hover:bg-indigo-50 font-extrabold text-xs px-4 py-2 rounded-lg transition shadow-xs cursor-pointer select-none whitespace-nowrap"
-        >
-          👑 View Plans & Upgrade
-        </button>
+        <div className="flex gap-2.5">
+          <button
+            onClick={() => setActiveTab('wallet')}
+            className="bg-indigo-700 hover:bg-indigo-850 border border-indigo-500 text-white font-extrabold text-[11px] px-3 py-2 rounded-lg transition shadow-xs cursor-pointer select-none whitespace-nowrap flex items-center gap-1.5"
+          >
+            <Wallet className="w-3.5 h-3.5" /> 💼 Wallet & Earnings
+          </button>
+          
+          <button
+            onClick={() => setActiveTab('shop')}
+            className="bg-white text-indigo-600 hover:bg-indigo-50 font-extrabold text-[11px] px-3 py-2 rounded-lg transition shadow-xs cursor-pointer select-none whitespace-nowrap"
+          >
+            👑 View Plans & Upgrade
+          </button>
+        </div>
       </div>
 
       {/* Global Toast Area */}
@@ -867,10 +954,18 @@ export function MirrorManager() {
           >
             <Radio className="w-4 h-4 shrink-0" /> Broadcast
           </button>
+
+          <button
+            onClick={() => setActiveTab('wallet')}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
+              ${activeTab === 'wallet' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            <Wallet className="w-4 h-4 shrink-0" /> Wallet & Earnings
+          </button>
         </div>
 
         {/* Tab Canvas Content */}
-        <div className="lg:col-span-3 space-y-6">
+        <div ref={canvasRef} className="lg:col-span-3 space-y-6">
 
           {/* TAB 1: Status Overview */}
           {activeTab === 'overview' && (
@@ -1984,7 +2079,186 @@ export function MirrorManager() {
             );
           })()}
 
+          {/* TAB 7: Wallet & Earnings */}
+          {activeTab === 'wallet' && (
+            <div className="space-y-6">
+              
+              {/* Wallet Summary Boxes */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                
+                <div className="bg-white border rounded-2xl p-5 shadow-xs flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-black text-gray-400">Withdrawable Balance</span>
+                    <p className="text-2xl font-black text-gray-900 font-mono">₹{wallet?.balance ?? '0.00'}</p>
+                    <p className="text-[10px] text-gray-500 font-semibold">Min. withdrawal: ₹100</p>
+                  </div>
+                  <div className="bg-emerald-50 text-emerald-600 p-3.5 rounded-full">
+                    <Wallet className="w-5 h-5 stroke-2" />
+                  </div>
+                </div>
 
+                <div className="bg-white border rounded-2xl p-5 shadow-xs flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-black text-gray-400">Total Commissions Earned</span>
+                    <p className="text-2xl font-black text-indigo-700 font-mono">₹{wallet?.totalEarned ?? '0.00'}</p>
+                    <p className="text-[10px] text-gray-500 font-semibold">Based on your current plan</p>
+                  </div>
+                  <div className="bg-indigo-50 text-indigo-600 p-3.5 rounded-full">
+                    <Coins className="w-5 h-5 stroke-2" />
+                  </div>
+                </div>
+
+                <div className="bg-white border rounded-2xl p-5 shadow-xs flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase font-black text-gray-400">Total Settled (Withdrawn)</span>
+                    <p className="text-2xl font-black text-gray-800 font-mono">₹{wallet?.totalWithdrawn ?? '0.00'}</p>
+                    <p className="text-[10px] text-gray-500 font-semibold">Transferred securely via UPI</p>
+                  </div>
+                  <div className="bg-slate-100 text-slate-700 p-3.5 rounded-full">
+                    <Landmark className="w-5 h-5 stroke-2" />
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Commission Details alert/guideline */}
+              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5 text-xs text-indigo-900 leading-relaxed space-y-1 font-semibold">
+                <p className="font-extrabold uppercase text-[10px] text-indigo-950 flex items-center gap-1.5 mb-1.5 animate-pulse">
+                  <Award className="w-4 h-4 text-indigo-700 animate-spin" /> Mirror Commission Distribution Rules:
+                </p>
+                <p>As a mirror bot owner, you earn direct commission shares from any and all shop credit/package purchases processed within your cloned bot! Commission share percentages scale based on your subscription tier:</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2.5 font-mono text-[11px] text-center">
+                  <div className="bg-white border rounded-lg p-2 shadow-xs">
+                    <p className="text-gray-400 font-sans font-bold uppercase text-[9px]">Free Plan</p>
+                    <p className="text-gray-800 font-extrabold text-sm">20% Share</p>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 text-blue-900 rounded-lg p-2 shadow-xs">
+                    <p className="text-blue-500 font-sans font-bold uppercase text-[9px]">Silver Plan</p>
+                    <p className="text-blue-700 font-extrabold text-sm">35% Share</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 text-amber-900 rounded-lg p-2 shadow-xs">
+                    <p className="text-amber-500 font-sans font-bold uppercase text-[9px]">Gold Plan</p>
+                    <p className="text-amber-700 font-extrabold text-sm">50% Share</p>
+                  </div>
+                  <div className="bg-purple-50 border border-purple-100 text-purple-900 rounded-lg p-2 shadow-xs">
+                    <p className="text-purple-500 font-sans font-bold uppercase text-[9px]">Max Plan</p>
+                    <p className="text-purple-700 font-extrabold text-sm">70% Share</p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-indigo-650 italic font-medium pt-2">Upgrade your plan at any time to instantly trigger higher percentage payouts for subsequent sales!</p>
+              </div>
+
+              {/* Submit Withdrawal Request Form & Wallet history */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* Request form */}
+                <div className="bg-white rounded-2xl border border-gray-150 p-5 space-y-4 md:col-span-1">
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900 uppercase">Submit Withdrawal</h3>
+                    <p className="text-[10px] text-gray-400 mt-0.5">Submit your UPI ID to request a manual bank payout of your earnings.</p>
+                  </div>
+
+                  <form onSubmit={handleWithdrawSubmit} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold text-gray-500">BHIM UPI Address (VPA)</label>
+                      <input 
+                        type="text"
+                        required
+                        value={upiId}
+                        onChange={(e) => setUpiId(e.target.value)}
+                        placeholder="e.g. yourname@ybl or upiid@upi"
+                        className="w-full border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold text-gray-500">Withdrawal Amount (₹)</label>
+                      <input 
+                        type="number"
+                        required
+                        min="100"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        placeholder="Min ₹100"
+                        className="w-full border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    {withdrawError && (
+                      <div className="p-3 bg-red-50 border border-red-100 text-red-800 text-[10px] rounded-lg font-bold">
+                        ❌ {withdrawError}
+                      </div>
+                    )}
+
+                    {withdrawSuccess && (
+                      <div className="p-3 bg-green-50 border border-green-100 text-green-800 text-[10px] rounded-lg font-bold font-sans">
+                        🎉 {withdrawSuccess}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={withdrawLoading || !withdrawAmount || !upiId}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs p-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      {withdrawLoading ? 'Submitting request...' : 'Submit Payout Request'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Wallet History */}
+                <div className="bg-white rounded-2xl border border-gray-150 p-5 space-y-4 md:col-span-2">
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900 uppercase">Wallet Ledger & History</h3>
+                    <p className="text-[10px] text-gray-400 mt-0.5">Logs of earnings and withdrawal transactions.</p>
+                  </div>
+
+                  {walletLoading ? (
+                    <div className="h-44 flex items-center justify-center font-bold text-gray-300 text-xs uppercase tracking-wider">
+                      REFRESHING LEDGER ...
+                    </div>
+                  ) : !wallet || !wallet.history || wallet.history.length === 0 ? (
+                    <div className="h-32 flex flex-col items-center justify-center border border-dashed rounded-xl bg-gray-50/50 text-gray-400">
+                      <Clock className="w-7 h-7 text-gray-300 stroke-1 mb-1.5" />
+                      <p className="text-xs font-semibold">No transactions recorded in wallet ledger yet.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-y-auto max-h-[300px] border rounded-xl divide-y">
+                      {[...wallet.history].reverse().map((h: any, idx: number) => {
+                        const isIncome = h.amount > 0;
+                        return (
+                          <div key={idx} className="p-3 flex items-center justify-between text-xs hover:bg-gray-50 transition">
+                            <div className="space-y-1 select-none pr-3">
+                              <p className="font-semibold text-gray-800 leading-snug">{h.description || 'Earnings Commission Share'}</p>
+                              <p className="text-[10px] text-gray-400 font-mono">{new Date(h.date).toLocaleString()}</p>
+                            </div>
+                            
+                            <div className="text-right shrink-0 space-y-1 font-mono">
+                              <p className={`font-black text-xs ${isIncome ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {isIncome ? '+' : ''}₹{h.amount}
+                              </p>
+                              {h.status !== 'N/A' && (
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-bold uppercase
+                                  ${h.status === 'Pending' ? 'bg-amber-100 text-amber-800' : ''}
+                                  ${h.status === 'Paid' ? 'bg-green-100 text-green-800' : ''}
+                                  ${h.status === 'Rejected' ? 'bg-rose-100 text-rose-800' : ''}
+                                `}>
+                                  {h.status}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                </div>
+
+              </div>
+
+            </div>
+          )}
 
         </div>
         {showPointsHelpModal && (

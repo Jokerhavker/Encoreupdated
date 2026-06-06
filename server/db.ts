@@ -164,6 +164,31 @@ const MirrorBotSchema = new mongoose.Schema({
   isPointsExceeded: { type: Boolean, default: false }
 }, { timestamps: true });
 
+const MirrorWalletSchema = new mongoose.Schema({
+  ownerTelegramId: { type: String, required: true, unique: true },
+  balance: { type: Number, default: 0 },
+  totalEarned: { type: Number, default: 0 },
+  totalWithdrawn: { type: Number, default: 0 },
+  history: [{
+    type: { type: String }, // 'earning', 'withdrawal_request', 'withdrawal_rejected', 'withdrawal_paid'
+    amount: { type: Number, required: true },
+    description: { type: String },
+    status: { type: String }, // 'Pending', 'Paid', 'Rejected', 'N/A'
+    date: { type: Date, default: Date.now }
+  }]
+}, { timestamps: true });
+
+const MirrorWithdrawalRequestSchema = new mongoose.Schema({
+  ownerTelegramId: { type: String, required: true },
+  ownerUsername: { type: String },
+  amount: { type: Number, required: true },
+  upiId: { type: String, required: true },
+  status: { type: String, enum: ['Pending', 'Paid', 'Rejected'], default: 'Pending' },
+  screenshotUrl: { type: String },
+  rejectionReason: { type: String },
+  historyId: { type: mongoose.Schema.Types.ObjectId }
+}, { timestamps: true });
+
 export const Command = (mongoose.models.Command || mongoose.model('Command', CommandSchema, 'encore_commands')) as mongoose.Model<any>;
 export const BotUser = (mongoose.models.BotUser || mongoose.model('BotUser', UserSchema, 'encore_users')) as mongoose.Model<any>;
 export const BotGroup = (mongoose.models.BotGroup || mongoose.model('BotGroup', GroupSchema, 'encore_groups')) as mongoose.Model<any>;
@@ -174,6 +199,8 @@ export const UsedTransaction = (mongoose.models.UsedTransaction || mongoose.mode
 export const BroadcastHistory = (mongoose.models.BroadcastHistory || mongoose.model('BroadcastHistory', BroadcastHistorySchema, 'encore_broadcast_history')) as mongoose.Model<any>;
 export const Coupon = (mongoose.models.Coupon || mongoose.model('Coupon', CouponSchema, 'encore_coupons')) as mongoose.Model<any>;
 export const MirrorBot = (mongoose.models.MirrorBot || mongoose.model('MirrorBot', MirrorBotSchema, 'encore_mirror_bots')) as mongoose.Model<any>;
+export const MirrorWallet = (mongoose.models.MirrorWallet || mongoose.model('MirrorWallet', MirrorWalletSchema, 'encore_mirror_wallets')) as mongoose.Model<any>;
+export const MirrorWithdrawalRequest = (mongoose.models.MirrorWithdrawalRequest || mongoose.model('MirrorWithdrawalRequest', MirrorWithdrawalRequestSchema, 'encore_mirror_withdrawal_requests')) as mongoose.Model<any>;
 
 export async function connectDB() {
   if (mongoose.connection.readyState >= 1) return;

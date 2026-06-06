@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import axios from 'axios';
-import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot } from './db.js';
+import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest } from './db.js';
 import { getBot, setupWebhook } from './bot.js';
 import { 
   startMirrorBot, 
@@ -10,7 +10,8 @@ import {
   getMaxForceChannels, 
   getMirroredBotInstance,
   isCreditOverrideAllowed,
-  checkAndResetIntegrationPoints
+  checkAndResetIntegrationPoints,
+  creditMirrorBotCommission
 } from './mirrorBotManager.js';
 
 export const apiRouter = express.Router();
@@ -1636,7 +1637,7 @@ apiRouter.post('/api/shop/validate-coupon', async (req, res) => {
 
 apiRouter.post('/api/shop/verify-payment', async (req, res) => {
   try {
-    const { telegramId, productId, amount, paymentId, creditsCount, couponCode } = req.body;
+    const { telegramId, productId, amount, paymentId, creditsCount, couponCode, botRef } = req.body;
     if (!telegramId || !productId || !amount || !paymentId) {
       return res.status(400).json({ error: 'Missing required validation parameters.' });
     }
@@ -1850,6 +1851,15 @@ apiRouter.post('/api/shop/verify-payment', async (req, res) => {
 
     await user.save();
 
+    // Commission Awarding if loaded via a cloned bot
+    if (botRef) {
+      try {
+        await creditMirrorBotCommission(botRef, Number(amount), finalProductName || productId);
+      } catch (commissionErr: any) {
+        console.error("[Commission Awarding Error]", commissionErr.message);
+      }
+    }
+
     // 5. Send message from Bot to notify user (optional but extremely high-end UI/UX experience)
     try {
       const botInstance = getBot();
@@ -1997,6 +2007,158 @@ apiRouter.post('/api/admin/mirror-bots/tier-config', async (req, res) => {
     );
 
     res.json({ success: true, message: 'Mirror Subscription Tiers updated successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// --- OWNER EARNINGS & WALLET SYSTEMS ---
+
+// Fetch wallet earnings & history for a mirror bot owner
+apiRouter.get('/api/mirror-bots/wallet', async (req, res) => {
+  try {
+    const { ownerTelegramId } = req.query;
+    if (!ownerTelegramId) return res.status(400).json({ error: 'Missing ownerTelegramId parameter' });
+
+    let wallet = await MirrorWallet.findOne({ ownerTelegramId: String(ownerTelegramId) });
+    if (!wallet) {
+      wallet = await MirrorWallet.create({ ownerTelegramId: String(ownerTelegramId), balance: 0, totalEarned: 0, totalWithdrawn: 0 });
+    }
+
+    res.json({ success: true, wallet });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Submit a withdrawal request
+apiRouter.post('/api/mirror-bots/withdraw', async (req, res) => {
+  try {
+    const { ownerTelegramId, ownerUsername, amount, upiId } = req.body;
+    if (!ownerTelegramId || !amount || !upiId) {
+      return res.status(400).json({ error: 'Missing ownerTelegramId, amount, or upiId.' });
+    }
+
+    const withdrawAmount = Number(amount);
+    if (isNaN(withdrawAmount) || withdrawAmount < 100) {
+      return res.status(400).json({ error: 'Minimum withdrawal amount is ₹100.' });
+    }
+
+    let wallet = await MirrorWallet.findOne({ ownerTelegramId: String(ownerTelegramId) });
+    if (!wallet || wallet.balance < withdrawAmount) {
+      return res.status(400).json({ error: 'Insufficient wallet balance for this withdrawal.' });
+    }
+
+    // Deduct balance
+    wallet.balance = Math.round((wallet.balance - withdrawAmount) * 100) / 100;
+    wallet.totalWithdrawn = Math.round(((wallet.totalWithdrawn || 0) + withdrawAmount) * 100) / 100;
+
+    // Create history item
+    const historyItem = {
+      type: 'withdrawal_request',
+      amount: -withdrawAmount,
+      description: `Withdrawal request submitted (UPI: ${upiId})`,
+      status: 'Pending',
+      date: new Date()
+    };
+    wallet.history.push(historyItem);
+    await wallet.save();
+
+    // Get reference subdoc id
+    const savedItem = wallet.history[wallet.history.length - 1];
+
+    // Create in global withdrawal register
+    const request = await MirrorWithdrawalRequest.create({
+      ownerTelegramId: String(ownerTelegramId),
+      ownerUsername: ownerUsername || '',
+      amount: withdrawAmount,
+      upiId: String(upiId),
+      status: 'Pending',
+      historyId: savedItem._id
+    });
+
+    res.json({ success: true, message: 'Withdrawal request submitted successfully!', wallet });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin list all withdrawal requests
+apiRouter.get('/api/mirror-bots/withdrawal-requests', async (req, res) => {
+  try {
+    const requests = await MirrorWithdrawalRequest.find().sort({ createdAt: -1 });
+    res.json({ success: true, requests });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin approve/reject withdrawal requests
+apiRouter.post('/api/mirror-bots/withdrawal-requests/:id/action', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, screenshotUrl, rejectionReason } = req.body;
+    if (!['Paid', 'Rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status parameter values.' });
+    }
+
+    const request = await MirrorWithdrawalRequest.findById(id);
+    if (!request) return res.status(404).json({ error: 'Withdrawal request not found in database.' });
+
+    if (request.status !== 'Pending') {
+      return res.status(400).json({ error: 'This withdrawal request has already been finalized.' });
+    }
+
+    request.status = status;
+    if (status === 'Paid') {
+      request.screenshotUrl = screenshotUrl || '';
+    } else {
+      request.rejectionReason = rejectionReason || 'Rejected by main bot administrator.';
+    }
+    await request.save();
+
+    // Update historical item status on owner's wallet
+    const wallet = await MirrorWallet.findOne({ ownerTelegramId: request.ownerTelegramId });
+    if (wallet) {
+      const histItem = wallet.history.id(request.historyId);
+      if (histItem) {
+        if (status === 'Paid') {
+          histItem.status = 'Paid';
+        } else {
+          histItem.status = 'Rejected';
+          // Refund balance to the user
+          const refundAmount = Math.abs(histItem.amount);
+          wallet.balance = Math.round((wallet.balance + refundAmount) * 100) / 100;
+          wallet.totalWithdrawn = Math.round((wallet.totalWithdrawn - refundAmount) * 100) / 100;
+          
+          wallet.history.push({
+            type: 'withdrawal_rejected',
+            amount: refundAmount,
+            description: `Refund: Withdrawal request of ₹${refundAmount} rejected. Reason: ${rejectionReason || 'UPI details issue'}`,
+            status: 'N/A',
+            date: new Date()
+          });
+        }
+        await wallet.save();
+      }
+    }
+
+    // Try sending notification to the user
+    try {
+      const mainBot = getBot();
+      if (mainBot) {
+        const notifyMsg = status === 'Paid'
+          ? `✅ *Withdrawal Marked as Paid!* ✅\n\nYour withdrawal request for *₹${request.amount}* has been successfully processed and marked as **PAID** by the administrator!\n\nUPI Destination ID: \`${request.upiId}\``
+          : `❌ *Withdrawal Request Rejected!* ❌\n\nYour withdrawal request for *₹${request.amount}* has been rejected and refunded back to your wallet balance.\n\n*Reason:* ${rejectionReason || 'Details mismatch'}`;
+          
+        await mainBot.telegram.sendMessage(request.ownerTelegramId, notifyMsg, { parse_mode: 'Markdown' });
+      }
+    } catch (msgErr: any) {
+      console.warn("Failed sending DM to wallet owner upon action details update:", msgErr.message);
+    }
+
+    res.json({ success: true, message: `Withdrawal request was marked as ${status} successfully.` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

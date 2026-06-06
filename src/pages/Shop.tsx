@@ -263,13 +263,15 @@ export function Shop() {
     setPaymentSuccess(null);
 
     try {
+      const botRef = searchParams.get('botRef') || undefined;
       const res = await axios.post('/api/shop/verify-payment', {
         telegramId: userId,
         productId: checkoutItem.id,
         amount: checkoutItem.price,
         paymentId: paymentId,
         creditsCount: checkoutItem.creditsCount,
-        couponCode: appliedCoupon ? appliedCoupon.code : undefined
+        couponCode: appliedCoupon ? appliedCoupon.code : undefined,
+        botRef: botRef
       });
 
       if (res.data.success) {
