@@ -86,6 +86,9 @@ apiRouter.post('/api/mirror-bots', async (req, res) => {
       forceChannels: []
     });
 
+    // Synchronize central owner points immediately on creation
+    await checkAndResetIntegrationPoints(newBot).catch(() => {});
+
     // Fire the Telegraf instance poller right away!
     await startMirrorBot(newBot).catch(() => {});
 

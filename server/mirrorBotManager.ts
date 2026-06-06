@@ -655,18 +655,21 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     console.error(`[Telegraf Error Handler] Error for bot token ${token.substring(0, 10)}...:`, err);
   });
 
-  // Async IIFE to set up webhook, or use long-polling if local (localhost/127.0.0.1)
+  // Async IIFE to set up webhook in production, or use long-polling in development/sandbox
   (async () => {
     try {
       const appUrl = getAppUrl();
-      const hasPublicUrl = appUrl && 
-                           appUrl.startsWith("https") && 
-                           !appUrl.includes("localhost") && 
-                           !appUrl.includes("127.0.0.1");
+      const isSandboxOrDev = !appUrl || 
+                             appUrl.includes("localhost") || 
+                             appUrl.includes("127.0.0.1") || 
+                             appUrl.includes("ais-dev") || 
+                             appUrl.includes("ais-pre") || 
+                             appUrl.includes("googleusercontent.com") || 
+                             process.env.FORCE_POLLING === "true";
 
-      if (hasPublicUrl) {
+      if (!isSandboxOrDev && appUrl && appUrl.startsWith("https")) {
         const webhookUrl = `${appUrl}/api/telegram/webhook/mirror/${token}`;
-        console.log(`[Mirror Bot Manager] Public HTTPS environment detected. Registering Webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to: ${webhookUrl}`);
+        console.log(`[Mirror Bot Manager] Public production environment detected. Registering Webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to: ${webhookUrl}`);
         
         // Telegram webhooks require https
         await bot.telegram.setWebhook(webhookUrl, {
@@ -674,7 +677,7 @@ export async function startMirrorBot(mirrorBotDoc: any) {
           drop_pending_updates: true
         });
       } else {
-        console.log(`[Mirror Bot Manager] Local environment details. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling...`);
+        console.log(`[Mirror Bot Manager] Sandbox/Development environment detected. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling...`);
         await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
         bot.launch({
           allowedUpdates: ["message", "callback_query"],
