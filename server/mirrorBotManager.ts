@@ -407,12 +407,6 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
     const keyboard = {
       inline_keyboard: [
-        [
-          { text: "📊 My Groups Stats", callback_data: "view_my_groups" }
-        ],
-        [
-          { text: "📜 Purchase History", callback_data: "view_purchase_history" }
-        ],
         [{ text: "🔙 Back to Main", callback_data: "view_start" }]
       ]
     };
@@ -454,10 +448,10 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
     const keyboard = {
       inline_keyboard: [
-        [{ text: "🛍️ OPEN STORE IN BROWSER", url: shopUrl }],
+        [{ text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }],
         [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" }],
         [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" }],
-        [{ text: "🤖 MAKE YOUR OWN BOT", url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` }],
+        [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` } }],
         [{ text: "🔙 Back to Start", callback_data: "view_start" }]
       ]
     };
@@ -1189,92 +1183,6 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
   bot.action("view_help", showMirrorHelp);
   bot.action("view_profile", showMirrorProfile);
-  
-  bot.action("view_purchase_history", async (ctx) => {
-    try {
-      const userId = String(ctx.from?.id);
-      const userDoc = await BotUser.findOne({ telegramId: userId });
-      if (!userDoc) {
-        await ctx.answerCbQuery("User profile not found").catch(() => ({}));
-        return;
-      }
-
-      let histText = "📜 *Your Purchase History* 📜\n\n";
-      const history = userDoc.purchaseHistory || [];
-
-      if (history.length === 0) {
-        histText += "ℹ️ _You haven't made any purchases yet. Use_ /shop _to unlock premium tools!_";
-      } else {
-        const sortedHistory = [...history].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8);
-        
-        sortedHistory.forEach((item: any, idx: number) => {
-          const dateStr = item.date ? new Date(item.date).toLocaleDateString("en-IN", { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : "N/A";
-          histText += `*${idx + 1}. ${item.productName || item.productId}*\n`;
-          histText += `   📅 Date: \`${dateStr}\` | 💰 Price: *₹${item.price}*\n`;
-          histText += `   🆔 UTR: \`${item.utr || item.transactionId || 'Completed'}\`\n\n`;
-        });
-        
-        if (history.length > 8) {
-          histText += `_Showing latest 8 of ${history.length} transactions._`;
-        }
-      }
-
-      await ctx.editMessageText(histText, {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "👤 Back to Profile", callback_data: "view_profile" }],
-            [{ text: "🔙 Go to Start Menu", callback_data: "view_start" }]
-          ]
-        }
-      }).catch(() => {});
-      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (err: any) {
-      console.error("Purchase history action err:", err);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading purchase history").catch(() => ({}));
-    }
-  });
-
-  bot.action("view_my_groups", async (ctx) => {
-    try {
-      const userId = String(ctx.from?.id);
-      const groups = await BotGroup.find({ ownerId: userId }).sort({
-        interactions: -1,
-      });
-
-      if (groups.length === 0) {
-        await ctx
-          .answerCbQuery("You have not added the bot to any groups yet.", {
-            show_alert: true,
-          })
-          .catch(() => ({}));
-        return;
-      }
-
-      let txt = `🏰 *Your Groups*\n\n`;
-
-      groups.forEach((g: any, i: number) => {
-        txt += `*${i + 1}.* ${g.groupName || g.groupId}\n`;
-        txt += `   👥 Members: ${g.memberCount || "N/A"}\n`;
-        txt += `   📊 Actions used today: ${g.interactions}\n\n`;
-      });
-
-      await ctx.editMessageText(txt, {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "👤 Back to Profile", callback_data: "view_profile" }],
-            [{ text: "🔙 Go to Start Menu", callback_data: "view_start" }]
-          ]
-        }
-      }).catch(() => {});
-      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (err: any) {
-      console.error("My groups action err:", err);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading groups stats").catch(() => ({}));
-    }
-  });
-
   bot.action("view_shop", showMirrorShop);
   bot.action("view_start", showMirrorStart);
 
@@ -1524,6 +1432,8 @@ export async function startMirrorBot(mirrorBotDoc: any) {
       const isSandboxOrDev = !appUrl || 
                              appUrl.includes("localhost") || 
                              appUrl.includes("127.0.0.1") || 
+                             appUrl.includes("ais-dev") || 
+                             appUrl.includes("ais-pre") || 
                              appUrl.includes("googleusercontent.com") || 
                              process.env.FORCE_POLLING === "true";
 

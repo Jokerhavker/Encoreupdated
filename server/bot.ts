@@ -98,7 +98,7 @@ async function showBotShopMenu(ctx: any) {
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "🔗 OPEN STORE IN BROWSER", url: shopUrl } as any],
+      [{ text: "🔗 OPEN STORE IN WEBAPP", web_app: { url: shopUrl } } as any],
       [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" } as any],
       [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" } as any],
       [{ text: "🔙 Back to Start", callback_data: "view_start" } as any],
@@ -1549,7 +1549,7 @@ export async function initializeBot() {
         const markup = {
           inline_keyboard: [
             [{ text: "👤 My Profile", callback_data: "view_profile", style: "success" } as any],
-            [{ text: "🤖 MAKE YOUR OWN BOT", url: `${appUrl}/mirrors` } as any],
+            [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors` } } as any],
             [{ text: "🛍️ Bot Shop (New)", callback_data: "view_shop", style: "success" } as any],
             [{ text: "ℹ️ Help Center", callback_data: "view_help", style: "primary" } as any],
           ],
@@ -1940,8 +1940,8 @@ export async function initializeBot() {
                   inline_keyboard: [
                     [
                       {
-                        text: "💸 Open Rewards in Browser",
-                        url: earnUrl,
+                        text: "💸 Open Rewards WebApp",
+                        web_app: { url: earnUrl },
                         style: "success",
                       } as any,
                     ],
@@ -1964,8 +1964,8 @@ export async function initializeBot() {
                   inline_keyboard: [
                     [
                       {
-                        text: "🛒 Open Shop in Browser",
-                        url: shopUrl,
+                        text: "🛒 Open Shop WebApp",
+                        web_app: { url: shopUrl },
                         style: "success",
                       } as any,
                     ],
@@ -1988,7 +1988,7 @@ export async function initializeBot() {
                   [
                     {
                       text: "🤖 MAKE YOUR OWN BOT",
-                      url: mirrorsUrl,
+                      web_app: { url: mirrorsUrl },
                     } as any,
                   ],
                   [
@@ -2239,7 +2239,7 @@ export async function initializeBot() {
                     [
                       {
                         text: "👑 Upgrade to Premium",
-                        url: shopUrl,
+                        web_app: { url: shopUrl },
                         style: "success",
                       } as any,
                     ],
