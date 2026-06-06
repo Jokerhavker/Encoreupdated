@@ -36,6 +36,46 @@ export function isCreditOverrideAllowed(plan: string, globalCredits: number, new
   return true;
 }
 
+export function currentMonthString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export function getBotIntegrationPointsLimit(plan: string): number {
+  const normalized = (plan || 'free').toLowerCase();
+  if (normalized === 'silver') return 50000;
+  if (normalized === 'gold') return 200000;
+  if (normalized === 'max') return 1500000;
+  return 10000; // free limit
+}
+
+export async function checkAndResetIntegrationPoints(botDoc: any): Promise<boolean> {
+  const currentMonth = currentMonthString();
+  let modified = false;
+
+  if (botDoc.integrationPointsMonth !== currentMonth) {
+    botDoc.integrationPointsMonth = currentMonth;
+    botDoc.integrationPointsUsed = 0;
+    botDoc.isPointsExceeded = false;
+    modified = true;
+  }
+
+  const limit = getBotIntegrationPointsLimit(botDoc.plan);
+  if (botDoc.integrationPointsUsed >= limit && !botDoc.isPointsExceeded) {
+    botDoc.isPointsExceeded = true;
+    modified = true;
+  } else if (botDoc.integrationPointsUsed < limit && botDoc.isPointsExceeded) {
+    botDoc.isPointsExceeded = false;
+    modified = true;
+  }
+
+  if (modified) {
+    await botDoc.save();
+  }
+
+  return botDoc.isPointsExceeded;
+}
+
 // Setup a mirrored bot dynamic event handlers
 export async function startMirrorBot(mirrorBotDoc: any) {
   if (activeMirroredBots.has(mirrorBotDoc.token)) {
@@ -53,6 +93,13 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     const reloadedBotDoc = await MirrorBot.findOne({ token });
     if (!reloadedBotDoc || !reloadedBotDoc.isActive) {
       console.log(`[Mirror Bot Tracker] Bot is disabled, ignoring message.`);
+      return;
+    }
+
+    // Check / reset monthly Integration Points
+    const pointsExceeded = await checkAndResetIntegrationPoints(reloadedBotDoc);
+    if (pointsExceeded) {
+      console.log(`[Mirror Bot Tracker] Bot is suspended due to Integration Points exhaustion.`);
       return;
     }
 
@@ -294,13 +341,56 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     }
   };
 
+  const showMirrorShop = async (ctx: any) => {
+    const doc = await MirrorBot.findOne({ token });
+    if (!doc) return;
+
+    const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+    const appUrl = vercelUrl
+      ? `https://${vercelUrl}`
+      : process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";
+    const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
+
+    let mainBotUsername = "EncoreXosintBot";
+    try {
+      const { getBot } = await import("./bot.js");
+      const mainBot = getBot();
+      if (mainBot) {
+        if (mainBot.botInfo?.username) {
+          mainBotUsername = mainBot.botInfo.username;
+        } else {
+          const me = await mainBot.telegram.getMe();
+          mainBotUsername = me.username;
+        }
+      }
+    } catch (e) {}
+
+    const messageText = `🛍️ *Bot Shop* 🛍️\n\n` +
+      `Upgrade your account status or purchase command credits to unlock higher daily command limits!\n\n` +
+      `Your purchases apply globally across all our bot mirrors. Select an option below:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }],
+        [{ text: "🤖 MAKE YOUR OWN BOT", url: `https://t.me/${mainBotUsername}` }],
+        [{ text: "🔙 Back to Start", callback_data: "view_start" }]
+      ]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(messageText, { parse_mode: 'Markdown', reply_markup: keyboard }).catch(() => {});
+    } else {
+      await ctx.reply(messageText, { parse_mode: 'Markdown', reply_markup: keyboard }).catch(() => {});
+    }
+  };
+
   const showMirrorStart = async (ctx: any) => {
     const doc = await MirrorBot.findOne({ token });
     if (!doc) return;
 
     const keyboard = {
       inline_keyboard: [
-        [{ text: "👤 My Profile", callback_data: "view_profile" }],
+        [{ text: "👤 My Profile", callback_data: "view_profile" }, { text: "🛍️ Bot Shop", callback_data: "view_shop" }],
         [{ text: "ℹ️ Help Center", callback_data: "view_help" }],
       ]
     };
@@ -318,6 +408,7 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
   bot.action("view_help", showMirrorHelp);
   bot.action("view_profile", showMirrorProfile);
+  bot.action("view_shop", showMirrorShop);
   bot.action("view_start", showMirrorStart);
 
   // 2. Incoming text messages router
@@ -358,6 +449,10 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
       if (userCommand === "/profile") {
         return showMirrorProfile(ctx);
+      }
+
+      if (userCommand === "/shop") {
+        return showMirrorShop(ctx);
       }
 
       // Owner Admin Panel commands directly inside chat
@@ -556,6 +651,30 @@ export async function initializeAllMirrorBots() {
 
 // Execute logic matching bot.ts core Command Runner
 async function executeCommandCore(ctx: any, userCommand: string, param: string, cmdDef: any, replyOptions: any, mirrorBotDoc: any) {
+  // Increment Integration Points usage for this cloned bot
+  try {
+    const freshBotDoc = await MirrorBot.findOne({ token: mirrorBotDoc.token });
+    if (freshBotDoc) {
+      await checkAndResetIntegrationPoints(freshBotDoc);
+      const pointsLimit = getBotIntegrationPointsLimit(freshBotDoc.plan);
+      if (freshBotDoc.integrationPointsUsed >= pointsLimit) {
+        freshBotDoc.isPointsExceeded = true;
+        await freshBotDoc.save();
+        stopMirrorBot(freshBotDoc.token);
+        await ctx.reply(`⚠️ *Integration Points Exhausted* ⚠️\n\nThis cloned bot has used all of its monthly allowance of ${pointsLimit.toLocaleString()} Integration points. The bot has been suspended/stopped for the remainder of this month.\n\nPlease contact the bot owner to upgrade their subscription plan to unlock more Integration points!`, replyOptions);
+        return;
+      }
+      freshBotDoc.integrationPointsUsed = (freshBotDoc.integrationPointsUsed || 0) + 1;
+      if (freshBotDoc.integrationPointsUsed >= pointsLimit) {
+        freshBotDoc.isPointsExceeded = true;
+        stopMirrorBot(freshBotDoc.token);
+      }
+      await freshBotDoc.save();
+    }
+  } catch (err: any) {
+    console.error(`[Integration points increment error]`, err.message);
+  }
+
   const isGroup = ctx.chat.type === "group" || ctx.chat.type === "supergroup";
   const userId = String(ctx.from?.id);
   const chatId = String(ctx.chat.id);

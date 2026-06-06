@@ -158,7 +158,10 @@ const MirrorBotSchema = new mongoose.Schema({
   // track broadcast usage
   broadcastsToday: { type: Number, default: 0 },
   lastBroadcastDate: { type: String },
-  expiresAt: { type: Date }
+  expiresAt: { type: Date },
+  integrationPointsUsed: { type: Number, default: 0 },
+  integrationPointsMonth: { type: String, default: "" },
+  isPointsExceeded: { type: Boolean, default: false }
 }, { timestamps: true });
 
 export const Command = (mongoose.models.Command || mongoose.model('Command', CommandSchema, 'encore_commands')) as mongoose.Model<any>;

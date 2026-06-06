@@ -22,6 +22,10 @@ export function MirrorManager() {
   const [ownedBots, setOwnedBots] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'users_groups' | 'shop' | 'broadcast'>('overview');
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [activeTab]);
+
   // Loading & Messages
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -43,6 +47,7 @@ export function MirrorManager() {
   const [botOverrideVal, setBotOverrideVal] = useState(50);
 
   // Shop / Purchasing States
+  const [showPointsHelpModal, setShowPointsHelpModal] = useState(false);
   const [checkoutPlan, setCheckoutPlan] = useState<any | null>(null);
   const [utrInput, setUtrInput] = useState('');
   const [paymentProcessing, setPaymentProcessing] = useState(false);
@@ -868,9 +873,9 @@ export function MirrorManager() {
             <div className="space-y-6">
               
               {/* Stats highlights */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5 animate-pulse">
                     <Users className="w-3.5 h-3.5 text-indigo-500" /> Bot Private Users
                   </p>
                   <p className="text-2xl font-black text-gray-800 font-mono">{botStats.totalUsers || 0}</p>
@@ -878,11 +883,68 @@ export function MirrorManager() {
                 </div>
 
                 <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1.5 animate-pulse">
                      <Settings className="w-3.5 h-3.5 text-indigo-500" /> Bot Group Chats
                   </p>
                   <p className="text-2xl font-black text-gray-800 font-mono">{botStats.totalGroups || 0}</p>
                   <p className="text-[10px] text-gray-400 font-medium mt-1">Groups actively tracked</p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1">
+                        <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" /> Integration Points
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowPointsHelpModal(true)}
+                        className="w-4 h-4 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800 text-[10px] font-black font-mono transition flex items-center justify-center cursor-pointer select-none"
+                      >
+                        i
+                      </button>
+                    </div>
+                    {(() => {
+                      const getPointsLimit = (p: string) => {
+                        const pl = (p || 'free').toLowerCase();
+                        if (pl === 'silver') return 50000;
+                        if (pl === 'gold') return 200000;
+                        if (pl === 'max') return 1500005; // 1.5M + check
+                        if (pl === 'max') return 1500000;
+                        return 10000;
+                      };
+                      const limit = getPointsLimit(activePlan);
+                      const used = botDetail?.integrationPointsUsed || 0;
+                      const percentage = limit > 0 ? (used / limit) * 100 : 0;
+                      return (
+                        <>
+                          <div className="flex items-baseline gap-1 mt-1">
+                            <span className="text-2xl font-black text-gray-800 font-mono">
+                              {used.toLocaleString()}
+                            </span>
+                            <span className="text-xs text-gray-400 font-bold">
+                              / {limit.toLocaleString()}
+                            </span>
+                          </div>
+
+                          <div className="mt-3">
+                            <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  percentage >= 90 ? 'bg-red-500' : percentage >= 75 ? 'bg-amber-500' : 'bg-emerald-500'
+                                }`}
+                                style={{ width: `${Math.min(percentage, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between items-center mt-1 text-[9px] text-gray-400 font-bold uppercase tracking-wider">
+                              <span>{percentage.toFixed(1)}% used</span>
+                              <span>{botDetail?.integrationPointsMonth || 'This Month'}</span>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 
@@ -923,6 +985,16 @@ export function MirrorManager() {
                     <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">User Credit System Editable?</p>
                     <p className="font-extrabold text-indigo-900">
                       {activePlan === 'free' ? '❌ No (Locked default user credits)' : '✅ Yes (Full customizable overrides allowed)'}
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 bg-gray-50 rounded-lg space-y-1">
+                    <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">Integration Points Quota</p>
+                    <p className="font-extrabold text-indigo-900">
+                      {activePlan === 'free' ? '10K Integration Points / month' : ''}
+                      {activePlan === 'silver' ? '50K Integration Points / month' : ''}
+                      {activePlan === 'gold' ? '200K Integration Points / month' : ''}
+                      {activePlan === 'max' ? '1.5M Integration Points / month' : ''}
                     </p>
                   </div>
                 </div>
@@ -1896,6 +1968,63 @@ export function MirrorManager() {
 
 
         </div>
+        {showPointsHelpModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in font-sans">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl relative overflow-hidden border border-gray-100">
+              <h3 className="text-base font-black text-gray-900 border-b pb-3 mb-4 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-amber-500 fill-amber-500" />
+                About Integration Points
+              </h3>
+
+              <div className="text-xs text-gray-600 space-y-3 font-medium select-none">
+                <p>
+                  <strong>What are Integration Points?</strong><br />
+                  Integration Points are monthly resource tokens used to scale and rate-limit cloned bots in the Mirror system. They keep the servers blazing fast for everyone!
+                </p>
+                <p>
+                  <strong>How does consumption work?</strong><br />
+                  Every successfully validated command (such as built-in lookups or custom-added API endpoints) processed by your cloned bot consumes exactly <strong>1 Integration point</strong>.
+                </p>
+                <p>
+                  <strong>What are the Monthly Allowances?</strong>
+                </p>
+                <div className="space-y-1 bg-gray-50 p-3 rounded-lg border border-gray-100 font-mono text-[11px] text-gray-800">
+                  <div className="flex justify-between">
+                    <span>FREE PLAN:</span>
+                    <span className="font-bold">10,000 / month</span>
+                  </div>
+                  <div className="flex justify-between text-indigo-600">
+                    <span>SILVER PLAN:</span>
+                    <span className="font-bold">50,000 / month</span>
+                  </div>
+                  <div className="flex justify-between text-amber-600">
+                    <span>GOLD PLAN:</span>
+                    <span className="font-bold font-sans font-medium">200,000 / month</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-600">
+                    <span>MAX PLAN:</span>
+                    <span className="font-bold">1,500,000 / month</span>
+                  </div>
+                </div>
+                <p>
+                  <strong>Auto-Stop & Reset Safeguards:</strong><br />
+                  If your bot consumes 100% of its monthly allowance, it will <strong>auto-stop</strong> and remain suspended for the remainder of the calendar month to protect system resources. 
+                  It will <strong>automatically resume</strong> at the beginning of the next month. Alternatively, you can upgrade your plan to immediately raise the cap!
+                </p>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-2 text-xs font-bold font-sans">
+                <button
+                  type="button"
+                  onClick={() => setShowPointsHelpModal(false)}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition cursor-pointer select-none"
+                >
+                  Got it, thanks!
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

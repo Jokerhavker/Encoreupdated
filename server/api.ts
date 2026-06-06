@@ -9,7 +9,8 @@ import {
   stopMirrorBot, 
   getMaxForceChannels, 
   getMirroredBotInstance,
-  isCreditOverrideAllowed
+  isCreditOverrideAllowed,
+  checkAndResetIntegrationPoints
 } from './mirrorBotManager.js';
 
 export const apiRouter = express.Router();
@@ -138,6 +139,14 @@ apiRouter.get('/api/mirror-bots/detail', async (req, res) => {
 
     const botDoc = await MirrorBot.findOne({ token });
     if (!botDoc) return res.status(404).json({ error: 'Bot configuration not found' });
+
+    // Check & Reset Integration points
+    await checkAndResetIntegrationPoints(botDoc);
+
+    // If bot is active but poller has stopped, and points are not exceeded, start it
+    if (botDoc.isActive && !botDoc.isPointsExceeded && !getMirroredBotInstance(botDoc.token)) {
+      await startMirrorBot(botDoc).catch(() => {});
+    }
 
     const botUsername = botDoc.botUsername;
     let usersCount = 0;
