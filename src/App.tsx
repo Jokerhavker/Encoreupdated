@@ -15,6 +15,7 @@ import { AdminGuard } from './components/AdminGuard';
 import { RedeemStoreManagement } from './pages/RedeemStoreManagement';
 import { Transactions } from './pages/Transactions';
 import { MirrorManager } from './pages/MirrorManager';
+import { MirrorAdmin } from './pages/MirrorAdmin';
 
 export default function App() {
   return (
@@ -24,11 +25,11 @@ export default function App() {
         <Route path="/rewards" element={<Offerwall />} />
         <Route path="/redeem" element={<Redeem />} />
         <Route path="/shop" element={<Shop />} />
-        <Route path="/mirror-bots" element={<MirrorManager />} />
         <Route path="/mirrors" element={<MirrorManager />} />
         <Route element={<AdminGuard />}>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
+            <Route path="mirror-bots" element={<MirrorAdmin />} />
             <Route path="commands" element={<Commands />} />
             <Route path="users" element={<Users />} />
             <Route path="groups" element={<Groups />} />

@@ -1604,3 +1604,111 @@ apiRouter.post('/api/shop/verify-payment', async (req, res) => {
   }
 });
 
+// --- MASTER ADMIN MIRROR BOTS ENDPOINTS ---
+
+apiRouter.get('/api/admin/mirror-bots', async (req, res) => {
+  try {
+    const bots = await MirrorBot.find({}).sort({ createdAt: -1 });
+    const botsWithStats = await Promise.all(bots.map(async (bot) => {
+      let totalUsers = 0;
+      let totalGroups = 0;
+      if (bot.botUsername) {
+        totalUsers = await BotUser.countDocuments({ interactedBots: bot.botUsername });
+        totalGroups = await BotGroup.countDocuments({ interactedBots: bot.botUsername });
+      }
+      return {
+        ...bot.toObject(),
+        stats: { totalUsers, totalGroups }
+      };
+    }));
+
+    // Load tiers config
+    let configDoc = await Setting.findOne({ key: 'mirrorTiersConfig' });
+    if (!configDoc) {
+      // Create default config if missing
+      const defaultTiers = [
+        { id: 'free', name: 'Free (Standard)', price: 0, maxChannels: 1, broadcastLimit: 1, desc: 'Lifetime basic bot clone' },
+        { id: 'silver', name: 'Silver Monthly', price: 999, maxChannels: 3, broadcastLimit: 5, desc: 'Standard clone user with default edits' },
+        { id: 'gold', name: 'Gold Pro', price: 1999, maxChannels: 5, broadcastLimit: 20, desc: 'High limits with double command override rights' },
+        { id: 'max', name: 'Max Whitelabel', price: 3999, maxChannels: 99, broadcastLimit: 9999, desc: 'Total custom white-labeling with custom commands and no limits' }
+      ];
+      configDoc = await Setting.create({ key: 'mirrorTiersConfig', value: defaultTiers });
+    }
+
+    res.json({
+      success: true,
+      bots: botsWithStats,
+      tierConfig: configDoc.value
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/admin/mirror-bots/update', async (req, res) => {
+  try {
+    const { token, plan, isActive, expiresAt, customBotName, defaultGroupCredits, ownerTelegramId } = req.body;
+    if (!token) return res.status(400).json({ error: 'Missing token parameter' });
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (!botDoc) return res.status(404).json({ error: 'Mirror Bot entry not found' });
+
+    if (plan !== undefined) botDoc.plan = plan;
+    if (isActive !== undefined) botDoc.isActive = !!isActive;
+    if (expiresAt !== undefined) {
+      botDoc.expiresAt = expiresAt ? new Date(expiresAt) : undefined;
+    }
+    if (customBotName !== undefined) botDoc.customBotName = customBotName;
+    if (defaultGroupCredits !== undefined) botDoc.defaultGroupCredits = Number(defaultGroupCredits);
+    if (ownerTelegramId !== undefined) botDoc.ownerTelegramId = ownerTelegramId;
+
+    await botDoc.save();
+
+    // Restart the bot poller to pick up new configurations and limits
+    stopMirrorBot(token);
+    if (botDoc.isActive) {
+      await startMirrorBot(botDoc).catch((e: any) => console.error("Error launching mirror bot poller upon admin edit:", e));
+    }
+
+    res.json({ success: true, bot: botDoc });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/admin/mirror-bots/delete', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Missing token' });
+
+    const botDoc = await MirrorBot.findOne({ token });
+    if (botDoc) {
+      stopMirrorBot(token);
+      await MirrorBot.deleteOne({ token });
+    }
+
+    res.json({ success: true, message: 'Mirrored bot was deleted and poller stopped completely.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/admin/mirror-bots/tier-config', async (req, res) => {
+  try {
+    const { tierConfig } = req.body;
+    if (!tierConfig || !Array.isArray(tierConfig)) {
+      return res.status(400).json({ error: 'Invalid or missing tierConfig array' });
+    }
+
+    await Setting.findOneAndUpdate(
+      { key: 'mirrorTiersConfig' },
+      { value: tierConfig },
+      { upsert: true }
+    );
+
+    res.json({ success: true, message: 'Mirror Subscription Tiers updated successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
