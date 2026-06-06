@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
   Bot, Key, Shield, Radio, Plus, Trash2, Edit3, 
@@ -21,9 +21,13 @@ export function MirrorManager() {
   const [botStats, setBotStats] = useState<any>({ totalUsers: 0, totalGroups: 0 });
   const [ownedBots, setOwnedBots] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'users_groups' | 'shop' | 'broadcast'>('overview');
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (containerRef.current) {
+      containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }, [activeTab]);
 
   // Loading & Messages
@@ -704,7 +708,7 @@ export function MirrorManager() {
   const activePlan = botDetail?.plan || 'free';
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pt-4 pb-8">
+    <div ref={containerRef} className="max-w-5xl mx-auto space-y-6 pt-4 pb-8">
       
       {/* Bot info header strip */}
       <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1880,6 +1884,12 @@ export function MirrorManager() {
                           <div>
                             <h4 className="font-extrabold text-sm text-gray-950">Secure UPI Checkout Terminal</h4>
                             <p className="text-[10px] text-gray-450 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
+                            <div className="mt-1 bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5 text-[9px] font-black w-fit uppercase font-mono">
+                              {checkoutPlan.id === 'silver' ? 'Contains 50,000 Points/mo' : ''}
+                              {checkoutPlan.id === 'gold' ? 'Contains 200,000 Points/mo' : ''}
+                              {checkoutPlan.id === 'max' ? 'Contains 1,500,000 Points/mo' : ''}
+                              {!['silver', 'gold', 'max'].includes(checkoutPlan.id) ? 'Contains 10,000 Points/mo' : ''}
+                            </div>
                           </div>
                           <button 
                             onClick={() => setCheckoutPlan(null)}
