@@ -1785,6 +1785,15 @@ export function MirrorManager() {
                                         <span className="font-medium">Daily Target Broadcast Message Limits:</span>
                                         <span className="font-extrabold text-gray-900 font-mono">{p.broadcastLimit} users</span>
                                       </div>
+                                      <div className="py-2.5 flex justify-between">
+                                        <span className="font-medium">Monthly Integration Points:</span>
+                                        <span className="font-extrabold text-indigo-600 font-mono">
+                                          {p.id === 'silver' ? '50,000 / mo' : ''}
+                                          {p.id === 'gold' ? '200,000 / mo' : ''}
+                                          {p.id === 'max' ? '1,500,000 / mo' : ''}
+                                          {!['silver', 'gold', 'max'].includes(p.id) ? '10,000 / mo' : ''}
+                                        </span>
+                                      </div>
                                       <div className="py-3 text-[10.5px] text-gray-500 leading-relaxed italic">
                                         💡 {p.desc || 'Premium privilege access parameter controls & automated multi-join force checkers.'}
                                       </div>

@@ -78,11 +78,12 @@ export async function checkAndResetIntegrationPoints(botDoc: any): Promise<boole
 
 // Setup a mirrored bot dynamic event handlers
 export async function startMirrorBot(mirrorBotDoc: any) {
-  if (activeMirroredBots.has(mirrorBotDoc.token)) {
-    return activeMirroredBots.get(mirrorBotDoc.token);
+  const token = mirrorBotDoc.token;
+  if (activeMirroredBots.has(token)) {
+    console.log(`[Mirror Bot Manager] Re-starting bot and stopping old poller for token: ${token.substring(0, 10)}...`);
+    stopMirrorBot(token);
   }
 
-  const token = mirrorBotDoc.token;
   const bot = new Telegraf(token);
 
   // 1. Setup global interaction & tracking middleware
@@ -615,12 +616,29 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     }
   });
 
-  bot.launch().catch((err: any) => {
-    console.error(`Failed launching mirrored bot token: ${token}`, err.message);
+  // Global error handler to prevent crashing or stalling of long poller
+  bot.catch((err: any, ctx: any) => {
+    console.error(`[Telegraf Error Handler] Error for bot token ${token.substring(0, 10)}...:`, err);
   });
+
+  // Async IIFE to delete existing webhook and drop any pending queue updates
+  (async () => {
+    try {
+      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+    } catch (e: any) {
+      console.warn(`[Telegraf] Optional webhook delete fail for mirror bot:`, e.message);
+    }
+    
+    bot.launch({
+      allowedUpdates: ["message", "callback_query"],
+      dropPendingUpdates: true,
+    }).catch((err: any) => {
+      console.error(`Failed launching mirrored bot token: ${token}`, err.message);
+    });
+  })();
   
   activeMirroredBots.set(token, bot);
-  console.log(`Mirrored bot started successfully: ${mirrorBotDoc.botUsername} (${mirrorBotDoc.plan.toUpperCase()})`);
+  console.log(`Mirrored bot registered in pollers map: ${mirrorBotDoc.botUsername || 'cloned_bot'} (${mirrorBotDoc.plan.toUpperCase()})`);
   return bot;
 }
 
@@ -640,9 +658,14 @@ export async function initializeAllMirrorBots() {
   await connectDB();
   try {
     const bots = await MirrorBot.find({ isActive: true });
-    console.log(`[Mirror Bot Startup Loader] Starting ${bots.length} active mirror bots...`);
+    console.log(`[Mirror Bot Startup Loader] Restoring ${bots.length} active mirror bots...`);
     for (const b of bots) {
-      await startMirrorBot(b).catch(() => {});
+      const isExceeded = await checkAndResetIntegrationPoints(b);
+      if (!isExceeded) {
+        await startMirrorBot(b).catch(() => {});
+      } else {
+        console.log(`[Mirror Bot Startup Loader] Skipping startup for ${b.botUsername || b.token.substring(0,8)} due to Integration Points quota limit exceeded for this month.`);
+      }
     }
   } catch (err: any) {
     console.error("[Mirror Bot Startup Loader Error]", err.message);
