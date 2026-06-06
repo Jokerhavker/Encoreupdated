@@ -1,0 +1,6 @@
+{
+  "name": "ENCBOT",
+  "description": "Advanced Telegram bot management dashboard with API-backed commands, force-subscribe logic, and real-time statistics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
