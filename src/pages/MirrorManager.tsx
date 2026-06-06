@@ -5,6 +5,7 @@ import {
   CheckCircle2, Ban, Users, Settings, Award, 
   AlertTriangle, Zap, ExternalLink, RefreshCw, XCircle, ListFilter
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export function MirrorManager() {
   // Query param auto-fill
@@ -47,6 +48,8 @@ export function MirrorManager() {
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [payError, setPayError] = useState('');
   const [paySuccess, setPaySuccess] = useState('');
+  const [planSlideIndex, setPlanSlideIndex] = useState(0);
+  const [sliderDirection, setSliderDirection] = useState(0); // -1 for left, 1 for right
 
   // Page inputs
   const [tempTokenInput, setTempTokenInput] = useState('');
@@ -1417,11 +1420,11 @@ export function MirrorManager() {
                             <div>
                               <p className="font-semibold text-xs text-gray-800">{u.firstName || 'User'} {u.username && <span className="text-indigo-600 font-mono text-[10px]">@{u.username}</span>}</p>
                               <p className="font-mono text-[9px] text-gray-400">Telegram ID: <span className="text-gray-600 font-bold">{u.telegramId}</span></p>
-                              {u.commonCredits && Object.keys(u.commonCredits).length > 0 && (
+                              {u.commandCredits && u.commandCredits.length > 0 && (
                                 <div className="mt-1 flex flex-wrap gap-1">
-                                  <span className="text-[8px] text-gray-400 uppercase tracking-widest block w-full">Custom Credits:</span>
-                                  {Object.entries(u.commonCredits).map(([cmd, amt]: any) => (
-                                    <span key={cmd} className="bg-indigo-50 text-indigo-700 text-[8px] font-mono px-1 rounded font-bold">{cmd}: {amt}</span>
+                                  <span className="text-[8px] text-gray-400 uppercase tracking-widest block w-full">Daily Limits overrides:</span>
+                                  {u.commandCredits.map((cc: any) => (
+                                    <span key={cc.command} className="bg-indigo-50 text-indigo-700 text-[8px] font-mono px-1 rounded font-bold">{cc.command}: {cc.dailyLimit}</span>
                                   ))}
                                 </div>
                               )}
@@ -1431,8 +1434,9 @@ export function MirrorManager() {
                               <button
                                 onClick={() => {
                                   setEditingUser(u);
-                                  setEditCreditsAmount(u.commonCredits?.[defaultCommands[0]?.command] || 0);
                                   setEditCreditsCommand(defaultCommands[0]?.command || '');
+                                  const cc = u.commandCredits?.find((x: any) => x.command === (defaultCommands[0]?.command || ''));
+                                  setEditCreditsAmount(cc ? cc.dailyLimit : (defaultCommands[0]?.defaultDailyCredits || 0));
                                 }}
                                 className="bg-white border text-[10px] py-1 px-2.5 rounded-md text-gray-700 hover:bg-gray-150 cursor-pointer text-center font-semibold"
                               >
@@ -1541,7 +1545,8 @@ export function MirrorManager() {
                           value={editCreditsCommand}
                           onChange={(e) => {
                             setEditCreditsCommand(e.target.value);
-                            setEditCreditsAmount(editingUser.commonCredits?.[e.target.value] || 0);
+                            const cc = editingUser.commandCredits?.find((x: any) => x.command === e.target.value);
+                            setEditCreditsAmount(cc ? cc.dailyLimit : (defaultCommands.find(c => c.command === e.target.value)?.defaultDailyCredits || 0));
                           }}
                           className="w-full border rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                         >
@@ -1552,7 +1557,7 @@ export function MirrorManager() {
                       </div>
 
                       <div>
-                        <label className="text-[10px] uppercase font-bold text-indigo-950 block mb-1">Common Credits Override Limit</label>
+                        <label className="text-[10px] uppercase font-bold text-indigo-950 block mb-1">Daily Limit Override Amount</label>
                         <input 
                           type="number"
                           value={editCreditsAmount}
@@ -1584,178 +1589,309 @@ export function MirrorManager() {
           )}
 
           {/* TAB 7: Detailed Purchasing & Plan Upgrades page */}
-          {activeTab === 'shop' && (
-            <div className="space-y-6">
-              
-              {/* Plan Cards display */}
-              <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5">
-                <div className="border-b pb-3 mb-5">
-                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                    <Award className="w-5 h-5 text-indigo-600" /> Professional Subscription Elevators
-                  </h3>
-                  <p className="text-[10px] text-gray-400 font-medium mt-1">
-                    Upgrade your mirrored instance to unlock extended limits, bespoke command parameters, custom brand logs, and larger force join capabilities!
-                  </p>
-                </div>
+          {activeTab === 'shop' && (() => {
+            const availablePlans = registeredTiers.filter(t => t.id !== 'free');
+            const p = availablePlans[planSlideIndex];
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                  {registeredTiers.filter(t => t.id !== 'free').map(t => {
-                    const isCurrent = botDetail?.plan === t.id;
-                    return (
-                      <div key={t.id} className={`rounded-xl border p-5 flex flex-col justify-between transition relative overflow-hidden
-                        ${isCurrent 
-                          ? 'border-indigo-600 bg-indigo-50/10 ring-1 ring-indigo-600 shadow-md' 
-                          : 'border-gray-200 hover:shadow-md bg-white'}`}
-                      >
-                        {isCurrent && (
-                          <span className="absolute top-2 right-2 bg-indigo-600 text-white font-mono text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full">
-                            Active Plan
-                          </span>
-                        )}
-                        
-                        <div className="space-y-4">
-                          <div>
-                            <span className="font-extrabold text-xs uppercase text-indigo-600 tracking-widest">{t.id} Plan</span>
-                            <h4 className="font-black text-lg text-gray-950 mt-1">{t.name}</h4>
-                            <p className="text-2xl font-black text-gray-900 font-mono mt-1.5">₹{t.price}<span className="text-xs font-normal text-gray-400">/mo</span></p>
-                          </div>
+            return (
+              <div className="space-y-6">
+                <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-6">
+                  <div className="border-b pb-4 mb-6">
+                    <h3 className="text-base font-black text-gray-900 flex items-center gap-1.5">
+                      <Award className="w-5 h-5 text-indigo-600" /> Professional Subscription Elevators
+                    </h3>
+                    <p className="text-xs text-gray-400 font-medium mt-1">
+                      Upgrade your mirrored instance to unlock extended limits, bespoke command parameters, custom brand logs, and larger force join capabilities!
+                    </p>
+                  </div>
 
-                          <div className="divide-y text-[11px] text-gray-650 font-sans">
-                            <div className="py-2 flex justify-between">
-                              <span>Max Force Channels:</span>
-                              <span className="font-bold text-gray-900 font-mono">{t.maxChannels}</span>
-                            </div>
-                            <div className="py-2 flex justify-between">
-                              <span>Day Broadcasts:</span>
-                              <span className="font-bold text-gray-900 font-mono">{t.broadcastLimit}</span>
-                            </div>
-                            <div className="py-2 text-[10px] text-gray-500 leading-normal italic">
-                              {t.desc || 'Gain privilege access to command overrides & customizable database systems!'}
-                            </div>
-                          </div>
-
-                          {t.editableCommands && t.editableCommands.length > 0 && (
-                            <div className="border border-indigo-50 bg-indigo-50/30 rounded-lg p-2.5">
-                              <p className="text-[9px] uppercase font-bold text-indigo-950 tracking-wider">Customizable Command Credits limits</p>
-                              <div className="grid grid-cols-1 gap-1 mt-1 font-mono text-[10px] text-gray-650">
-                                {t.editableCommands.map((ec: any) => (
-                                  <div key={ec.command} className="flex justify-between">
-                                    <span>{ec.command}</span>
-                                    <span className="font-bold text-indigo-600">Up to {ec.maxLimit}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-5">
+                  {/* Modern Tab Selector with animated spring highlight background */}
+                  {availablePlans.length > 0 && (
+                    <div className="flex justify-center border-b border-gray-100 pb-4 gap-2 relative bg-gray-50/70 p-1.5 rounded-xl max-w-md mx-auto mb-6">
+                      {availablePlans.map((item, idx) => {
+                        const isSelected = planSlideIndex === idx;
+                        return (
                           <button
+                            key={item.id}
                             onClick={() => {
-                              setCheckoutPlan(t);
-                              setPayError('');
-                              setPaySuccess('');
-                              setUtrInput('');
+                              setSliderDirection(idx > planSlideIndex ? 1 : -1);
+                              setPlanSlideIndex(idx);
                             }}
-                            className={`w-full font-bold py-2 px-4 rounded-lg text-xs cursor-pointer tracking-wider text-center transition
-                              ${isCurrent 
-                                ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' 
-                                : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                            className={`relative px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-lg cursor-pointer select-none z-10 w-full text-center
+                              ${isSelected ? 'text-white font-extrabold' : 'text-gray-500 hover:text-indigo-600'}`}
                           >
-                            {isCurrent ? 'Extend Plan (30 Days)' : `Choose ${t.name}`}
+                            {isSelected && (
+                              <motion.div
+                                layoutId="activePlanTab"
+                                className="absolute inset-0 bg-indigo-600 rounded-lg -z-10"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            {item.name}
                           </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-              {/* UPI Checkout Screen Portal Modal */}
-              {checkoutPlan && (
-                <div className="fixed inset-0 bg-indigo-950/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 font-sans">
-                  <div className="bg-white rounded-2xl max-w-md w-full p-6 border shadow-2xl space-y-4 text-left max-h-[90vh] overflow-y-auto">
-                    <div className="flex justify-between items-start border-b pb-2">
-                      <div>
-                        <h4 className="font-black text-base text-gray-900">Secure UPI Checkout Terminal</h4>
-                        <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
-                      </div>
-                      <button 
-                        onClick={() => setCheckoutPlan(null)}
-                        className="p-1 hover:bg-gray-150 rounded-full font-bold text-gray-400 hover:text-gray-750 text-xs cursor-pointer"
+                  {/* Horizontal Sliding Display Cards */}
+                  {availablePlans.length > 0 && p && (
+                    <div className="relative flex items-center justify-between gap-4 max-w-xl mx-auto">
+                      {/* Left Slide Button */}
+                      <button
+                        onClick={() => {
+                          const newIdx = (planSlideIndex - 1 + availablePlans.length) % availablePlans.length;
+                          setSliderDirection(-1);
+                          setPlanSlideIndex(newIdx);
+                        }}
+                        className="p-2 border border-gray-100 rounded-full hover:bg-gray-100 text-gray-600 hover:text-indigo-605 cursor-pointer transition shrink-0 select-none hidden sm:block w-9 h-9 flex items-center justify-center font-bold"
+                        title="Previous Plan"
                       >
-                        ✕ Close
+                        ◀
+                      </button>
+
+                      {/* Sliding Area */}
+                      <div className="w-full relative overflow-hidden min-h-[440px] flex flex-col items-center justify-center p-1">
+                        <AnimatePresence initial={false} custom={sliderDirection} mode="wait">
+                          <motion.div
+                            key={p.id}
+                            custom={sliderDirection}
+                            variants={{
+                              enter: (direction: number) => ({
+                                x: direction > 0 ? 150 : -150,
+                                opacity: 0,
+                                scale: 0.96
+                              }),
+                              center: {
+                                x: 0,
+                                opacity: 1,
+                                scale: 1,
+                                transition: { duration: 0.35, ease: "easeOut" }
+                              },
+                              exit: (direction: number) => ({
+                                x: direction < 0 ? 150 : -150,
+                                opacity: 0,
+                                scale: 0.96,
+                                transition: { duration: 0.3 }
+                              })
+                            }}
+                            initial="enter"
+                            animate="center"
+                            exit="exit"
+                            className="w-full"
+                          >
+                            {(() => {
+                              const isCurrent = botDetail?.plan === p.id;
+                              return (
+                                <div className={`rounded-2xl border p-6 flex flex-col justify-between transition-all duration-300 relative overflow-hidden bg-white
+                                  ${isCurrent 
+                                    ? 'border-indigo-600 bg-indigo-50/10 ring-2 ring-indigo-600/30' 
+                                    : 'border-gray-200 shadow-sm hover:shadow-md'}`}
+                                >
+                                  {isCurrent && (
+                                    <span className="absolute top-3 right-3 bg-indigo-600 text-white font-mono text-[8px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full shadow-xs">
+                                      ✨ Active Plan
+                                    </span>
+                                  )}
+
+                                  <div className="space-y-4 font-sans">
+                                    <div>
+                                      <span className="font-extrabold text-[10px] uppercase text-indigo-650 tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md">{p.id} Plan</span>
+                                      <h4 className="font-black text-xl text-gray-900 mt-2">{p.name}</h4>
+                                      <p className="text-3xl font-black text-gray-950 font-mono mt-1.5 flex items-baseline">
+                                        ₹{p.price}
+                                        <span className="text-xs font-semibold text-gray-400 ml-1">/ Month</span>
+                                      </p>
+                                    </div>
+
+                                    <div className="divide-y divide-gray-100 text-[11.5px] text-gray-650 space-y-0.5">
+                                      <div className="py-2.5 flex justify-between">
+                                        <span className="font-medium">Force Channel Subscriptions:</span>
+                                        <span className="font-extrabold text-gray-900 font-mono">{p.maxChannels} channels</span>
+                                      </div>
+                                      <div className="py-2.5 flex justify-between">
+                                        <span className="font-medium">Daily Target Broadcast Message Limits:</span>
+                                        <span className="font-extrabold text-gray-900 font-mono">{p.broadcastLimit} users</span>
+                                      </div>
+                                      <div className="py-3 text-[10.5px] text-gray-500 leading-relaxed italic">
+                                        💡 {p.desc || 'Premium privilege access parameter controls & automated multi-join force checkers.'}
+                                      </div>
+                                    </div>
+
+                                    {p.editableCommands && p.editableCommands.length > 0 && (
+                                      <div className="border border-indigo-100 bg-indigo-50/30 rounded-xl p-3.5 space-y-1.5">
+                                        <p className="text-[9.5px] uppercase font-black text-indigo-900 tracking-wider">Custom Limit Overrides</p>
+                                        <div className="grid grid-cols-1 gap-1.5 font-mono text-[10px] text-gray-600">
+                                          {p.editableCommands.map((ec: any) => (
+                                            <div key={ec.command} className="flex justify-between items-center border-b border-dashed border-gray-100 pb-1">
+                                              <span>{ec.command}</span>
+                                              <span className="font-bold text-indigo-700 bg-white px-1.5 py-0.5 rounded border border-indigo-100">Up to {ec.maxLimit} / day</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-6">
+                                    <button
+                                      onClick={() => {
+                                        setCheckoutPlan(p);
+                                        setPayError('');
+                                        setPaySuccess('');
+                                        setUtrInput('');
+                                      }}
+                                      className={`w-full font-extrabold py-2.5 px-4 rounded-xl text-xs cursor-pointer tracking-wider text-center transition shadow-xs select-none
+                                        ${isCurrent 
+                                          ? 'bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100' 
+                                          : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-md'}`}
+                                    >
+                                      {isCurrent ? '🔄 Extend Subscription Plan (30 Days)' : `🚀 Choose ${p.name}`}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </motion.div>
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Right Slide Button */}
+                      <button
+                        onClick={() => {
+                          const newIdx = (planSlideIndex + 1) % availablePlans.length;
+                          setSliderDirection(1);
+                          setPlanSlideIndex(newIdx);
+                        }}
+                        className="p-2 border border-gray-100 rounded-full hover:bg-gray-100 text-gray-600 hover:text-indigo-650 cursor-pointer transition shrink-0 select-none hidden sm:block w-9 h-9 flex items-center justify-center font-bold"
+                        title="Next Plan"
+                      >
+                        ▶
                       </button>
                     </div>
+                  )}
 
-                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 text-gray-705 space-y-2.5 text-xs text-center">
-                      <p className="font-bold text-indigo-950 uppercase tracking-widest text-[9px]">UPI Payment Credentials</p>
-                      
-                      {/* Deep Link Payment trigger */}
-                      <a 
-                        href={`upi://pay?pa=alkhkumar@fam&pn=Encore%20Xosint&am=${checkoutPlan.price}&cu=INR`}
-                        className="inline-block bg-indigo-600 text-white font-extrabold tracking-wide rounded-lg px-4 py-2 hover:bg-indigo-700 transition"
-                      >
-                        Pay ₹{checkoutPlan.price} instantly in UPI app
-                      </a>
-
-                      <p className="text-[10px] text-gray-400 font-medium">Or pay manually to the official receiver address:</p>
-                      <div className="bg-white border rounded px-3 py-1.5 font-mono text-center font-bold text-gray-800 text-sm flex items-center justify-center gap-1 w-full mx-auto max-w-[200px]">
-                        alkhkumar@fam
-                      </div>
-                    </div>
-
-                    <div className="space-y-3.5">
-                      <div className="border border-amber-150 bg-amber-50 rounded-xl p-3 text-[10px] text-amber-900 leading-relaxed font-semibold">
-                        ⚠️ DOUBLE-SPEND REACTION SYSTEM ACTIVE: Ensure you copy-paste the exact 12-digit transaction ID / UTR hash from your UPI application (e.g. Google Pay, PhonePe, Paytm, Fampay) after successful transfer. Simulated transactions are automatically filtered.
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref (12-Digit ID)</label>
-                        <input 
-                          type="text"
-                          placeholder="e.g. 614050212984"
-                          value={utrInput}
-                          onChange={(e) => setUtrInput(e.target.value.replace(/\D/g, '').substring(0, 12))}
-                          className="w-full border rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  {/* Dots Indicator */}
+                  {availablePlans.length > 0 && (
+                    <div className="flex justify-center gap-1.5 mt-2">
+                      {availablePlans.map((_, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            setSliderDirection(idx > planSlideIndex ? 1 : -1);
+                            setPlanSlideIndex(idx);
+                          }}
+                          className={`w-2 h-2 rounded-full transition cursor-pointer select-none
+                            ${idx === planSlideIndex ? 'bg-indigo-600 scale-125' : 'bg-gray-200 hover:bg-gray-350'}`}
                         />
-                        <p className="text-[9px] text-gray-400">Must be exactly a 12-digit UPI number sequence.</p>
-                      </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-                      {payError && (
-                        <div className="p-3 bg-red-50 border border-red-100 text-red-800 text-[10px] rounded-lg font-bold">
-                          ❌ {payError}
+                {/* UPI Checkout Screen Portal Modal */}
+                {checkoutPlan && (() => {
+                  const upiUrl = `upi://pay?pa=alkhkumar@fam&pn=Encore%20Xosint&am=${checkoutPlan.price}&cu=INR&tn=${encodeURIComponent(`Upgrade to ${checkoutPlan.name} Tier`)}`;
+                  return (
+                    <div className="fixed inset-0 bg-indigo-950/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 font-sans animate-fade-in">
+                      <div className="bg-white rounded-2xl max-w-sm w-full p-6 border shadow-2xl space-y-4 text-left max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-start border-b pb-2">
+                          <div>
+                            <h4 className="font-extrabold text-sm text-gray-950">Secure UPI Checkout Terminal</h4>
+                            <p className="text-[10px] text-gray-450 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
+                          </div>
+                          <button 
+                            onClick={() => setCheckoutPlan(null)}
+                            className="p-1 hover:bg-gray-100 rounded-full font-bold text-gray-400 hover:text-gray-700 text-xs cursor-pointer select-none"
+                          >
+                            ✕ Close
+                          </button>
                         </div>
-                      )}
 
-                      {paySuccess && (
-                        <div className="p-3 bg-green-50 border border-green-100 text-green-800 text-[10px] rounded-lg font-bold font-sans">
-                          🎉 {paySuccess}
+                        {/* QR Code Section */}
+                        <div className="flex flex-col items-center justify-center space-y-2 border pb-4 bg-gray-50/50 rounded-xl p-4 border-gray-100">
+                          <span className="text-[9px] uppercase font-black text-indigo-900 tracking-wider">Scan QR Code to Pay ₹{checkoutPlan.price}</span>
+                          <div className="flex items-center justify-center bg-white p-2.5 rounded-2xl border border-gray-200/80 shadow-md relative w-44 h-44">
+                            <img 
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=170x170&data=${encodeURIComponent(upiUrl)}`}
+                              alt="UPI QR Code"
+                              className="w-40 h-40 block"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                          <p className="text-[9px] text-gray-400 font-medium italic text-center px-2 leading-normal">
+                            Scan with Google Pay, PhonePe, Paytm, FamPay, or any BHIM UPI Application.
+                          </p>
                         </div>
-                      )}
 
-                      <div className="flex gap-2 justify-end pt-2 border-t font-sans">
-                        <button
-                          onClick={() => setCheckoutPlan(null)}
-                          disabled={paymentProcessing}
-                          className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => handleVerifySubPayment(checkoutPlan.id, checkoutPlan.price)}
-                          disabled={paymentProcessing}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer flex items-center justify-center gap-1"
-                        >
-                          {paymentProcessing ? 'Verifying payment...' : 'Verify Transfer & Activate Plan'}
-                        </button>
+                        <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5 text-gray-700 space-y-2 text-xs text-center">
+                          <p className="font-bold text-indigo-950 uppercase tracking-widest text-[8px]">Direct Payment Application Trigger</p>
+                          <a 
+                            href={upiUrl}
+                            className="inline-block bg-indigo-650 text-white font-extrabold tracking-wide rounded-lg px-4 py-1.5 text-xs hover:bg-indigo-700 transition"
+                          >
+                            Pay ₹{checkoutPlan.price} instantly in UPI App
+                          </a>
+
+                          <p className="text-[10px] text-gray-400 font-medium pt-1">Or manual address transfer:</p>
+                          <div className="bg-white border text-xs rounded px-3 py-1 font-mono text-center font-bold text-gray-800 w-full mx-auto max-w-[180px]">
+                            alkhkumar@fam
+                          </div>
+                        </div>
+
+                        <div className="space-y-3.5">
+                          <div className="border border-amber-150 bg-amber-50 rounded-xl p-3 text-[10px] text-amber-900 leading-relaxed font-semibold">
+                            ⚠️ DOUBLE-SPEND REACTION SYSTEM ACTIVE: Ensure you copy-paste the exact 12-digit transaction ID / UTR hash from your UPI application after successful transfer. Simulated transactions are automatically filtered.
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref (12-Digit ID)</label>
+                            <input 
+                              type="text"
+                              placeholder="e.g. 614050212984"
+                              value={utrInput}
+                              onChange={(e) => setUtrInput(e.target.value.replace(/\D/g, '').substring(0, 12))}
+                              className="w-full border rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <p className="text-[9px] text-gray-400">Must be exactly a 12-digit UPI number sequence.</p>
+                          </div>
+
+                          {payError && (
+                            <div className="p-3 bg-red-50 border border-red-100 text-red-800 text-[10px] rounded-lg font-bold">
+                              ❌ {payError}
+                            </div>
+                          )}
+
+                          {paySuccess && (
+                            <div className="p-3 bg-green-50 border border-green-100 text-green-800 text-[10px] rounded-lg font-bold font-sans">
+                              🎉 {paySuccess}
+                            </div>
+                          )}
+
+                          <div className="flex gap-2 justify-end pt-2 border-t font-sans">
+                            <button
+                              onClick={() => setCheckoutPlan(null)}
+                              disabled={paymentProcessing}
+                              className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleVerifySubPayment(checkoutPlan.id, checkoutPlan.price)}
+                              disabled={paymentProcessing}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer flex items-center justify-center gap-1"
+                            >
+                              {paymentProcessing ? 'Verifying payment...' : 'Verify Transfer & Activate'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                  );
+                })()}
+              </div>
+            );
+          })()}
 
 
 

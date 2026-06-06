@@ -245,11 +245,15 @@ apiRouter.post('/api/mirror-bots/update-user-credits', async (req, res) => {
     const user = await BotUser.findOne({ telegramId: userTelegramId });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    if (!user.commonCredits) {
-      user.commonCredits = new Map();
+    let commandCredits = user.commandCredits || [];
+    const idx = commandCredits.findIndex((c: any) => c.command === command);
+    if (idx >= 0) {
+      commandCredits[idx].dailyLimit = Number(commonCreditsAmount);
+    } else {
+      commandCredits.push({ command, dailyLimit: Number(commonCreditsAmount), isUnlimited: false });
     }
-    user.commonCredits.set(command, Number(commonCreditsAmount));
-    user.markModified('commonCredits');
+    user.commandCredits = commandCredits;
+    user.markModified('commandCredits');
     await user.save();
 
     res.json({ success: true, message: 'User credits updated successfully!' });
