@@ -45,8 +45,23 @@ async function startServer() {
   }
 
   // Webhook for Mirror Bots
-  app.post('/api/telegram/webhook/mirror/:token', (req, res) => {
-    const { token } = req.params;
+  app.post('/api/telegram/webhook/mirror/*', (req, res) => {
+    const prefix = '/api/telegram/webhook/mirror/';
+    const token = req.path.substring(req.path.indexOf(prefix) + prefix.length);
+    if (!token) {
+      return res.status(400).send("No token supplied");
+    }
+
+    const updateId = req.body?.update_id;
+    const message = req.body?.message;
+    const callbackQuery = req.body?.callback_query;
+    const fromUser = message?.from || callbackQuery?.from;
+    const text = message?.text || "";
+
+    console.log(
+      `[Mirror Webhook] Received update ID: ${updateId || 'unknown'} | Token: ${token.substring(0, 10)}... | User: ${fromUser?.username || 'unknown'} | Text: "${text.substring(0, 50)}"`
+    );
+
     handleMirrorBotWebhook(token, req.body, res).catch((err: any) => {
       console.error(`[Webhook Update Error] Mirror Bot token ${token ? token.substring(0, 10) : ''}... Error:`, err);
       if (!res.headersSent) res.sendStatus(200);

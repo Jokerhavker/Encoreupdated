@@ -621,25 +621,32 @@ export async function startMirrorBot(mirrorBotDoc: any) {
     console.error(`[Telegraf Error Handler] Error for bot token ${token.substring(0, 10)}...:`, err);
   });
 
-  // Async IIFE to set up webhook or fallback to long-polling
+  // Async IIFE to set up webhook in production, or use long-polling in development
   (async () => {
     try {
       const appUrl = getAppUrl();
-      if (appUrl && appUrl.startsWith('http')) {
+      const isProduction = process.env.NODE_ENV === "production" && 
+                          appUrl && 
+                          appUrl.startsWith("http") && 
+                          !appUrl.includes("localhost") && 
+                          !appUrl.includes("ais-dev") && 
+                          !appUrl.includes("127.0.0.1");
+
+      if (isProduction) {
         const webhookUrl = `${appUrl}/api/telegram/webhook/mirror/${token}`;
-        console.log(`[Mirror Bot Webhook] Registering webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to ${webhookUrl}`);
+        console.log(`[Mirror Bot Manager] Production environment detected. Registering webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to ${webhookUrl}`);
         await bot.telegram.setWebhook(webhookUrl, {
           allowed_updates: ["message", "callback_query"],
           drop_pending_updates: true
         });
       } else {
-        console.warn(`[Mirror Bot Manager] Invalid or empty APP_URL, falling back to long-polling.`);
+        console.log(`[Mirror Bot Manager] Development/Sandbox sandbox detected. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling (polling mode)...`);
         await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
         bot.launch({
           allowedUpdates: ["message", "callback_query"],
           dropPendingUpdates: true,
         }).catch((err: any) => {
-          console.error(`Failed launching mirrored bot token fallback: ${token}`, err.message);
+          console.error(`Failed launching mirrored bot token polling: ${token}`, err.message);
         });
       }
     } catch (e: any) {

@@ -1893,6 +1893,17 @@ export function MirrorManager() {
                                           {!['silver', 'gold', 'max'].includes(p.id) ? '10,000 / mo' : ''}
                                         </span>
                                       </div>
+                                      <div className="py-2.5 flex justify-between bg-emerald-50/45 px-2.5 rounded-lg border border-emerald-100/40 my-1 items-center">
+                                        <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                                          <Coins className="w-3.5 h-3.5 text-emerald-600" /> Webshop Commission Share:
+                                        </span>
+                                        <span className="font-black text-emerald-700 text-xs font-mono">
+                                          {p.id === 'silver' ? '35% Share' : ''}
+                                          {p.id === 'gold' ? '50% Share' : ''}
+                                          {p.id === 'max' ? '70% Share' : ''}
+                                          {!['silver', 'gold', 'max'].includes(p.id) ? '20% Share' : ''}
+                                        </span>
+                                      </div>
                                       <div className="py-3 text-[10.5px] text-gray-500 leading-relaxed italic">
                                         💡 {p.desc || 'Premium privilege access parameter controls & automated multi-join force checkers.'}
                                       </div>
