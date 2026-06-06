@@ -19,7 +19,7 @@ export function MirrorManager() {
   const [botDetail, setBotDetail] = useState<any>(null);
   const [botStats, setBotStats] = useState<any>({ totalUsers: 0, totalGroups: 0 });
   const [ownedBots, setOwnedBots] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'bans' | 'users_groups' | 'shop' | 'broadcast'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'commands' | 'users_groups' | 'shop' | 'broadcast'>('overview');
 
   // Loading & Messages
   const [loading, setLoading] = useState(false);
@@ -292,30 +292,7 @@ export function MirrorManager() {
     setLoading(false);
   };
 
-  // Change tier (mock pricing experience so users can fully test Silver, Gold and Max features!)
-  const switchExperiencePlan = async (planTier: 'free' | 'silver' | 'gold' | 'max') => {
-    if (!botDetail) return;
-    setLoading(true);
-    setSuccessMsg('');
-    setErrorMsg('');
-    try {
-      // Directly update plan on mirror-bots configuration using post endpoint
-      const res = await axios.post('/api/mirror-bots', {
-        token: botDetail.token,
-        ownerTelegramId: botDetail.ownerTelegramId,
-        plan: planTier
-      });
-      if (res.data?.success) {
-        setSuccessMsg(`Plan tier upgraded successfully to ${planTier.toUpperCase()}! Try experiencing all limited features.`);
-        await loadBotProfile(botDetail.token);
-      }
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Could not upgrade experience tier.');
-    }
-    setLoading(false);
-  };
-
-  // Toggle dynamic active bot poller state
+  // Toggle dynamic active bot status state
   const handleToggleBotActive = async () => {
     if (!botDetail) return;
     setLoading(true);
@@ -327,7 +304,7 @@ export function MirrorManager() {
       });
       if (res.data?.success) {
         setBotDetail({ ...botDetail, isActive: nextState });
-        setSuccessMsg(nextState ? "Mirrored Bot Poller started and online!" : "Mirrored bot poller stopped and offline.");
+        setSuccessMsg(nextState ? "Mirrored Bot Status started and online!" : "Mirrored bot status stopped and offline.");
       }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.error || 'Power toggle failed.');
@@ -414,39 +391,7 @@ export function MirrorManager() {
     setLoading(false);
   };
 
-  // Ban management
-  const handleBanManage = async (isBanned: boolean) => {
-    if (!botDetail) return;
-    if (!banId.trim()) {
-      setErrorMsg('Please specify some Telegram User or Group ID.');
-      return;
-    }
 
-    setLoading(true);
-    setSuccessMsg('');
-    setErrorMsg('');
-    try {
-      const res = await axios.post('/api/mirror-bots/ban', {
-        token: botDetail.token,
-        id: banId.trim(),
-        type: banType,
-        isBanned
-      });
-
-      if (res.data?.success) {
-        setSuccessMsg(isBanned ? `ID ${banId} banned successfully from your bot!` : `ID ${banId} has been unbanned.`);
-        setBotDetail({
-          ...botDetail,
-          bannedUsers: res.data.bannedUsers,
-          bannedGroups: res.data.bannedGroups
-        });
-        setBanId('');
-      }
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Ban state failed.');
-    }
-    setLoading(false);
-  };
 
   // Silver+ Action: Exclude system default command
   const handleToggleCommandActive = async (commandName: string, isCurrentlyExcluded: boolean) => {
@@ -791,7 +736,7 @@ export function MirrorManager() {
                 : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'}`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${botDetail?.isActive ? 'bg-green-500 animate-ping' : 'bg-red-500'}`} />
-            {botDetail?.isActive ? "Poller : Active" : "Poller : Paused"}
+            {botDetail?.isActive ? "Status : Active" : "Status : Paused"}
           </button>
 
           <button
@@ -831,32 +776,22 @@ export function MirrorManager() {
         </div>
       </div>
 
-      {/* Experience Plan Simulator Ribbon */}
-      <div className="bg-indigo-900 text-white rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 font-medium">
-        <div className="space-y-0.5">
-          <p className="text-xs font-bold text-indigo-200 uppercase tracking-widest flex items-center gap-1">
-            <Zap className="w-3.5 h-3.5" /> Experience Plan Simulator
+      {/* Top Banner replacing Simulator with direct Action */}
+      <div className="bg-indigo-600 text-white rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 font-medium">
+        <div className="space-y-1">
+          <p className="text-xs font-bold text-indigo-100 uppercase tracking-widest flex items-center gap-1.5">
+            <Award className="w-4 h-4 text-white" /> Upgrade & Shop Your Bot
           </p>
-          <p className="text-[11px] text-indigo-100 font-light pr-2">
-            Pricing mock toggle: easily switch plan tiers to test and evaluate features/limitations of each subscription tier!
+          <p className="text-[11px] text-indigo-50/90 font-light pr-2">
+            Gain privileged access to command overrides, customizable API endpoints, unlimited broadcasts, and multiple forced join channels.
           </p>
         </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {(['free', 'silver', 'gold', 'max'] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => switchExperiencePlan(p)}
-              disabled={loading}
-              className={`px-2.5 py-1 text-[10px] font-bold uppercase rounded-md tracking-wider transition cursor-pointer border
-                ${activePlan === p 
-                  ? 'bg-white text-indigo-950 border-white font-extrabold scale-105' 
-                  : 'bg-indigo-800 text-indigo-200 border-indigo-700 hover:bg-indigo-700'}`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+        <button
+          onClick={() => setActiveTab('shop')}
+          className="bg-white text-indigo-600 hover:bg-indigo-50 font-extrabold text-xs px-4 py-2 rounded-lg transition shadow-xs cursor-pointer select-none whitespace-nowrap"
+        >
+          👑 View Plans & Upgrade
+        </button>
       </div>
 
       {/* Global Toast Area */}
@@ -886,7 +821,7 @@ export function MirrorManager() {
             className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
               ${activeTab === 'overview' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
           >
-            <Bot className="w-4 h-4 shrink-0" /> Status Overview
+            <Bot className="w-4 h-4 shrink-0" /> Dashboard
           </button>
 
           <button
@@ -894,7 +829,7 @@ export function MirrorManager() {
             className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
               ${activeTab === 'settings' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
           >
-            <Settings className="w-4 h-4 shrink-0" /> Branding & Force-Join
+            <Settings className="w-4 h-4 shrink-0" /> General Settings
           </button>
 
           <button
@@ -902,15 +837,7 @@ export function MirrorManager() {
             className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
               ${activeTab === 'commands' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
           >
-            <Zap className="w-4 h-4 shrink-0" /> Commands Console
-          </button>
-
-          <button
-            onClick={() => setActiveTab('bans')}
-            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
-              ${activeTab === 'bans' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
-          >
-            <Ban className="w-4 h-4 shrink-0" /> Ban ID Terminal
+            <Zap className="w-4 h-4 shrink-0" /> Commands
           </button>
 
           <button
@@ -922,19 +849,11 @@ export function MirrorManager() {
           </button>
 
           <button
-            onClick={() => setActiveTab('shop')}
-            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
-              ${activeTab === 'shop' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
-          >
-            <Award className="w-4 h-4 shrink-0" /> Upgrade & Shop
-          </button>
-
-          <button
             onClick={() => setActiveTab('broadcast')}
             className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2.5 cursor-pointer
               ${activeTab === 'broadcast' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-600 hover:bg-gray-50'}`}
           >
-            <Radio className="w-4 h-4 shrink-0" /> Local Broadcast
+            <Radio className="w-4 h-4 shrink-0" /> Broadcast
           </button>
         </div>
 
@@ -968,7 +887,7 @@ export function MirrorManager() {
               <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-xs space-y-4">
                 <h3 className="text-sm font-bold text-gray-900 border-b pb-3 flex items-center gap-1.5">
                   <Award className="w-4 h-4 text-indigo-600" />
-                  Subscription Plan Features Allocation Check:
+                  Current Plan Details
                 </h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-medium text-gray-700">
@@ -1034,7 +953,7 @@ export function MirrorManager() {
 
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 tracking-wide uppercase mb-1 flex items-center gap-1">
-                      New Groups Initial Gift Credits
+                      Daily Group Credits
                     </label>
                     <input 
                       type="number" 
@@ -1117,8 +1036,8 @@ export function MirrorManager() {
                       <AlertTriangle className="w-4 h-4 shrink-0 text-indigo-600 mt-0.5" />
                       <div>
                         <strong>Free tier limits:</strong> Custom force subscription channels require SILVER plans or higher.
-                        <button onClick={() => switchExperiencePlan('silver')} className="text-indigo-600 font-extrabold hover:underline ml-1 block mt-1">
-                          ⚡ Experience SILVER instantly for free!
+                        <button onClick={() => setActiveTab('shop')} className="text-indigo-600 font-extrabold hover:underline ml-1 block mt-1">
+                          👑 Upgrade your plan here to add forced channels!
                         </button>
                       </div>
                     </div>
@@ -1170,49 +1089,95 @@ export function MirrorManager() {
               <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-6 space-y-4">
                 <div className="flex items-center justify-between border-b pb-3">
                   <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                    <ListFilter className="w-4 h-4 text-indigo-600" /> Default Commands Exclusion Panel
+                    <ListFilter className="w-4 h-4 text-indigo-600" /> Commands
                   </h3>
                   <span className="text-[10px] text-gray-500 font-bold uppercase select-none">
                     Core commands list
                   </span>
                 </div>
 
-                <p className="text-[11.5px] text-gray-500 leading-relaxed leading-normal">
-                  Toggle switch to temporarily exclude specific core commands on your bot clone. All user credits deduction systems remain fully synchronized to prevent double balances.
+                <p className="text-[11.5px] text-gray-500 leading-relaxed leading-normal mb-1">
+                  Adjust custom limit overrides and toggle exclusions of core commands on your bot clone. All user credits deduction systems remain fully synchronized.
                 </p>
 
                 {activePlan === 'free' ? (
-                  <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-900 leading-relaxed">
+                  <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-900 leading-relaxed mb-4">
                     <strong>Free Tier restrictions:</strong> In commands, free plan users can see Command Name and Global Credits. Excluding commands or custom limit overriding requires upgrade!
-                    <button onClick={() => switchExperiencePlan('silver')} className="text-indigo-600 font-extrabold hover:underline block mt-1">
-                      ⚡ Quick experience upgrade to SILVER
+                    <button onClick={() => setActiveTab('shop')} className="text-indigo-600 font-extrabold hover:underline block mt-1">
+                      👑 Quick upgrade your subscription parameters
                     </button>
                   </div>
                 ) : null}
 
-                <div className="space-y-2.5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {defaultCommands.map((cmd) => {
                     const isEx = !!(botDetail?.excludedCommands || []).includes(cmd.command);
+                    const currentTier = registeredTiers.find(t => t.id === activePlan);
+                    const isMax = activePlan === 'max';
+                    const allowedEditConfig = currentTier?.editableCommands?.find((ec: any) => ec.command === cmd.command);
+                    const isEditableInPlan = isMax || !!allowedEditConfig;
+                    const maxLimit = isMax ? 'No limit' : (allowedEditConfig ? `Up to ${allowedEditConfig.maxLimit}` : '');
+
+                    const currentOverride = botDetail?.commandCreditsOverrides?.find((co: any) => co.command === cmd.command)?.dailyLimit;
+                    const activeLimit = currentOverride !== undefined ? currentOverride : cmd.defaultDailyCredits;
+
                     return (
-                      <div key={cmd.command} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg border text-xs">
+                      <div key={cmd.command} className="bg-gray-50 rounded-lg border border-gray-100 p-3.5 flex flex-col justify-between gap-3 text-xs">
                         <div>
-                          <p className={`font-mono font-bold ${isEx ? 'text-gray-400 line-through' : 'text-gray-950'}`}>
-                            {cmd.command}
-                          </p>
-                          <p className="text-[10px] text-gray-400 font-medium">Credits Cost: *{cmd.defaultDailyCredits || 0}* credits</p>
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className={`font-mono font-bold text-sm ${isEx ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                                {cmd.command}
+                              </p>
+                              <p className="text-[10px] text-gray-400 font-semibold mt-0.5">Regular Daily Credits Limit: {cmd.defaultDailyCredits || 0}</p>
+                              <p className="text-[10px] text-indigo-600 font-bold mt-0.5">Current Active Quota Limit: {activeLimit}</p>
+                            </div>
+                            {activePlan !== 'free' && (
+                              <button
+                                onClick={() => handleToggleCommandActive(cmd.command, isEx)}
+                                disabled={loading}
+                                className={`px-2.5 py-1 rounded text-[10px] font-bold border transition cursor-pointer select-none
+                                  ${isEx 
+                                    ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' 
+                                    : 'bg-green-50 text-green-600 border-green-100 hover:bg-green-100'}`}
+                              >
+                                {isEx ? 'Exposed' : 'Excluded'}
+                              </button>
+                            )}
+                          </div>
                         </div>
 
-                        {activePlan !== 'free' && (
-                          <button
-                            onClick={() => handleToggleCommandActive(cmd.command, isEx)}
-                            disabled={loading}
-                            className={`px-3 py-1 rounded text-[10px] font-bold border transition cursor-pointer
-                              ${isEx 
-                                ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' 
-                                : 'bg-green-50 text-green-600 border-green-100 hover:bg-green-100'}`}
-                          >
-                            {isEx ? 'In-Active (Clonal Excluded)' : 'Active (Online)'}
-                          </button>
+                        {/* Inline limit override if allowed in their plan */}
+                        {isEditableInPlan ? (
+                          <div className="border-t pt-2 flex items-center justify-between gap-2.5 bg-white p-2 rounded border border-gray-100">
+                            <span className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-950">
+                              Edit Limit {maxLimit && <span className="text-gray-400">({maxLimit})</span>}
+                            </span>
+                            <div className="flex gap-1.5 items-center">
+                              <input
+                                type="number"
+                                placeholder={activeLimit.toString()}
+                                className="bg-white border rounded font-mono px-1.5 py-0.5 text-xs w-20 text-center focus:outline-none"
+                                id={`cmd-limit-input-${cmd.command}`}
+                              />
+                              <button
+                                onClick={() => {
+                                  const valStr = (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement)?.value;
+                                  if (valStr) {
+                                    handleSaveGlobalOverride(cmd.command, Number(valStr));
+                                    (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement).value = '';
+                                  }
+                                }}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] px-2.5 py-1 rounded transition select-none cursor-pointer"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : activePlan !== 'max' && (
+                          <div className="text-[9px] text-gray-400 italic font-medium px-1 leading-normal">
+                            🔒 Upgrade to customize limits for {cmd.command}
+                          </div>
                         )}
                       </div>
                     );
@@ -1345,81 +1310,14 @@ export function MirrorManager() {
             </div>
           )}
 
-          {/* TAB 4: Bans Terminal */}
-          {activeTab === 'bans' && (
-            <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-6 space-y-4">
-              <div className="border-b pb-3">
-                <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                  <Ban className="w-5 h-5 text-indigo-600" /> Banned Users & groups configuration
-                </h3>
-                <p className="text-[10px] text-gray-400 font-medium mt-1">Enforce customized bans specifically on your mirrored bot clone without affecting main server global parameters.</p>
-              </div>
 
-              <div className="space-y-4">
-                <div className="bg-gray-50 rounded-lg p-3.5 border text-xs">
-                  <div className="flex flex-wrap gap-4">
-                    <p className="text-xs font-bold text-gray-700 flex items-center gap-1.5">🛡️ Active Banned lists:</p>
-                    <span className="font-mono bg-white border border-gray-200 px-2 py-0.5 rounded text-[10px]">
-                      👤 Users: <strong>{(botDetail?.bannedUsers || []).length}</strong>
-                    </span>
-                    <span className="font-mono bg-white border border-gray-200 px-2 py-0.5 rounded text-[10px]">
-                      👥 Groups: <strong>{(botDetail?.bannedGroups || []).length}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-750 mb-1">Target ID (User Telegram Numeric ID or Chat ID)</label>
-                    <input 
-                      type="text" 
-                      value={banId}
-                      onChange={(e) => setBanId(e.target.value)}
-                      placeholder="e.g. 52930219"
-                      className="w-full border rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-750 mb-1">Target Chat Type</label>
-                    <select 
-                      value={banType}
-                      onChange={(e) => setBanType(e.target.value as any)}
-                      className="w-full border rounded-lg px-3 py-2 text-xs bg-white focus:outline-none"
-                    >
-                      <option value="user">User Chat ID (Private)</option>
-                      <option value="group">Group Broadcast ID</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex gap-2.5 pt-1">
-                  <button
-                    onClick={() => handleBanManage(true)}
-                    disabled={loading}
-                    className="bg-red-600 text-white font-bold py-1.5 px-4 rounded text-xs hover:bg-red-700 cursor-pointer transition"
-                  >
-                    🚫 Block ID
-                  </button>
-
-                  <button
-                    onClick={() => handleBanManage(false)}
-                    disabled={loading}
-                    className="bg-indigo-50 text-indigo-700 font-bold py-1.5 px-4 rounded text-xs border border-indigo-100 hover:bg-slate-100 cursor-pointer transition"
-                  >
-                    🔓 Lift Ban (Permit ID)
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* TAB 5: Broadcast Tab */}
           {activeTab === 'broadcast' && (
             <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-6 space-y-4">
               <div className="border-b pb-3">
                 <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                  <Radio className="w-5 h-5 text-indigo-600" /> Draft Mirror Broadcast campaign
+                  <Radio className="w-5 h-5 text-indigo-600" /> Broadcast
                 </h3>
                 <p className="text-[10px] text-gray-400 font-medium mt-1">Send customized broadcast notifications from your bot to users who have interacted with it directly!</p>
               </div>
@@ -1859,59 +1757,7 @@ export function MirrorManager() {
             </div>
           )}
 
-          {/* TAB 8: Global commands adjustments on overview */}
-          {activeTab === 'overview' && botDetail && (
-            <div className="bg-white rounded-xl shadow-xs border border-gray-100 p-5 space-y-4">
-              <div className="border-b pb-2">
-                <h4 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider text-indigo-950 flex items-center gap-1.5">
-                  🔧 Command-specific daily credit limits overrides
-                </h4>
-                <p className="text-[10px] text-gray-400 font-medium font-sans">Under your current plan ({botDetail.plan.toUpperCase()}), adjust the daily limit overrides enforced by this bot.</p>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {defaultCommands.map(cmd => {
-                  const currentOverride = botDetail.commandCreditsOverrides?.find((co: any) => co.command === cmd.command)?.dailyLimit;
-                  const activeLimit = currentOverride !== undefined ? currentOverride : cmd.defaultDailyCredits;
-                  
-                  return (
-                    <div key={cmd.command} className="bg-gray-50/50 border border-gray-100 rounded-lg p-3 flex flex-col justify-between gap-2.5">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-mono text-xs font-black text-gray-800">{cmd.command}</p>
-                          <p className="text-[10px] text-gray-400 font-sans">Regular: {cmd.defaultDailyCredits} credits</p>
-                        </div>
-                        <span className="bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded">
-                          Current: {activeLimit}
-                        </span>
-                      </div>
-
-                      <div className="flex gap-1.5 items-center">
-                        <input
-                          type="number"
-                          placeholder="New override"
-                          className="bg-white border text-[10px] rounded font-mono px-1 py-0.5 w-full text-center"
-                          id={`over-${cmd.command}`}
-                        />
-                        <button
-                          onClick={() => {
-                            const valStr = (document.getElementById(`over-${cmd.command}`) as HTMLInputElement)?.value;
-                            if (valStr) {
-                              handleSaveGlobalOverride(cmd.command, Number(valStr));
-                              (document.getElementById(`over-${cmd.command}`) as HTMLInputElement).value = '';
-                            }
-                          }}
-                          className="bg-indigo-600 text-white font-bold text-[10px] px-2.5 py-1 rounded cursor-pointer shrink-0 transition hover:bg-indigo-700"
-                        >
-                          Apply
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
         </div>
       </div>
