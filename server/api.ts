@@ -12,7 +12,8 @@ import {
   getMirroredBotInstance,
   isCreditOverrideAllowed,
   checkAndResetIntegrationPoints,
-  creditMirrorBotCommission
+  creditMirrorBotCommission,
+  isCurrentlySandboxOrDev
 } from './mirrorBotManager.js';
 
 export const apiRouter = express.Router();
@@ -152,8 +153,9 @@ apiRouter.get('/api/mirror-bots/detail', async (req, res) => {
     await checkAndResetIntegrationPoints(botDoc);
 
     // If bot is active but poller has stopped, and points are not exceeded, start it
-    if (botDoc.isActive && !botDoc.isPointsExceeded && !getMirroredBotInstance(botDoc.token)) {
-      await startMirrorBot(botDoc).catch(() => {});
+    const isSandbox = isCurrentlySandboxOrDev();
+    if (!isSandbox && botDoc.isActive && !botDoc.isPointsExceeded && !getMirroredBotInstance(botDoc.token)) {
+      await startMirrorBot(botDoc, true).catch(() => {});
     }
 
     const botUsername = botDoc.botUsername;

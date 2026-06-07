@@ -1979,6 +1979,30 @@ export async function initializeBot() {
             return;
           }
 
+          if (param && param.startsWith("mirrors")) {
+            const appUrl = getAppUrl();
+            const mirrorsUrl = `${appUrl}/mirrors?userid=${ctx.from?.id || ""}`;
+
+            await ctx.reply(
+              "🤖 *Make Your Own Mirrored Bot* 🤖\n\nClick the button below to open the Mirror manager and create/manage your own clones of this bot!",
+              {
+                ...replyOptions,
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "🤖 Open Mirror WebApp",
+                        web_app: { url: mirrorsUrl },
+                        style: "success",
+                      } as any,
+                    ],
+                  ],
+                },
+              },
+            );
+            return;
+          }
+
           const appUrl = getAppUrl();
           const mirrorsUrl = `${appUrl}/mirrors?userid=${ctx.from?.id || ""}`;
 

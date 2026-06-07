@@ -53,6 +53,12 @@ export function getMirroredBotInstance(token: string): Telegraf | null {
   return activeMirroredBots.get(token) || null;
 }
 
+export function isCurrentlySandboxOrDev(): boolean {
+  if (process.env.VERCEL === "1" || process.env.VERCEL_URL) return false;
+  if (process.env.NODE_ENV === "production" && !process.env.FORCE_POLLING) return false;
+  return true;
+}
+
 // Check plan constraints on custom channels
 export function getMaxForceChannels(plan: string): number {
   switch (plan) {
@@ -153,7 +159,7 @@ export async function checkAndResetIntegrationPoints(botDoc: any): Promise<boole
 }
 
 // Setup a mirrored bot dynamic event handlers
-export async function startMirrorBot(mirrorBotDoc: any) {
+export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false) {
   const token = mirrorBotDoc.token;
   let wasRunning = false;
   if (activeMirroredBots.has(token)) {
@@ -453,16 +459,34 @@ export async function startMirrorBot(mirrorBotDoc: any) {
       }
     } catch (e) {}
 
+    const isSandbox = isCurrentlySandboxOrDev();
+    const isAppUrlSandbox = !appUrl || 
+                            appUrl.includes("localhost") || 
+                            appUrl.includes("127.0.0.1") || 
+                            appUrl.includes("ais-dev") || 
+                            appUrl.includes("ais-pre") || 
+                            appUrl.includes("googleusercontent.com");
+
+    const useMainBotRedirect = isSandbox || isAppUrlSandbox;
+
     const messageText = `🛍️ *Bot Shop* 🛍️\n\n` +
       `Upgrade your account status or purchase command credits to unlock higher daily command limits!\n\n` +
       `Your purchases apply globally across all our bot mirrors. Select an option below:`;
 
     const keyboard = {
       inline_keyboard: [
-        [{ text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }],
+        [
+          useMainBotRedirect
+            ? { text: "🛍️ OPEN MAIN BOT STORE", url: `https://t.me/${mainBotUsername}?start=shop` }
+            : { text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }
+        ],
         [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" }],
         [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" }],
-        [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` } }],
+        [
+          useMainBotRedirect
+            ? { text: "🤖 MAKE YOUR OWN BOT", url: `https://t.me/${mainBotUsername}?start=mirrors` }
+            : { text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` } }
+        ],
         [{ text: "🔙 Back to Start", callback_data: "view_start" }]
       ]
     };
@@ -1535,23 +1559,21 @@ export async function startMirrorBot(mirrorBotDoc: any) {
   (async () => {
     try {
       const appUrl = getAppUrl();
-      const isSandboxOrDev = !appUrl || 
-                             appUrl.includes("localhost") || 
-                             appUrl.includes("127.0.0.1") || 
-                             appUrl.includes("ais-dev") || 
-                             appUrl.includes("ais-pre") || 
-                             appUrl.includes("googleusercontent.com") || 
-                             process.env.FORCE_POLLING === "true";
+      const isSandboxOrDev = isCurrentlySandboxOrDev();
 
       if (!isSandboxOrDev && appUrl && appUrl.startsWith("https")) {
         const webhookUrl = `${appUrl}/api/telegram/webhook/mirror/${token}`;
-        console.log(`[Mirror Bot Manager] Public production environment detected. Registering Webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to: ${webhookUrl}`);
         
-        // Telegram webhooks require https
-        await bot.telegram.setWebhook(webhookUrl, {
-          allowed_updates: ["message", "callback_query"],
-          drop_pending_updates: true
-        });
+        if (skipSetupWebhook) {
+          console.log(`[Mirror Bot Manager] Webhook setup skipped for @${mirrorBotDoc.botUsername || token.substring(0, 8)} (re-initialized from cache/webhook)`);
+        } else {
+          console.log(`[Mirror Bot Manager] Public production environment detected. Registering Webhook for @${mirrorBotDoc.botUsername || token.substring(0, 8)} to: ${webhookUrl}`);
+          // Telegram webhooks require https
+          await bot.telegram.setWebhook(webhookUrl, {
+            allowed_updates: ["message", "callback_query"],
+            drop_pending_updates: false
+          });
+        }
       } else {
         console.log(`[Mirror Bot Manager] Sandbox/Development environment detected. Launching @${mirrorBotDoc.botUsername || token.substring(0, 8)} with long-polling...`);
         await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
@@ -1595,13 +1617,19 @@ export function stopMirrorBot(token: string) {
 // Startup loader
 export async function initializeAllMirrorBots() {
   await connectDB();
+  
+  if (isCurrentlySandboxOrDev()) {
+    console.log("[Mirror Bot Startup Loader] Sandbox/Dev environment detected. Skipping background restoration of all active mirror bots to avoid webhook hijacking.");
+    return;
+  }
+
   try {
     const bots = await MirrorBot.find({ isActive: true });
-    console.log(`[Mirror Bot Startup Loader] Restoring ${bots.length} active mirror bots...`);
+    console.log(`[Mirror Bot Startup Loader] Restoring ${bots.length} active mirror bots with skipSetupWebhook=true...`);
     for (const b of bots) {
       const isExceeded = await checkAndResetIntegrationPoints(b);
       if (!isExceeded) {
-        await startMirrorBot(b).catch(() => {});
+        await startMirrorBot(b, true).catch(() => {});
       } else {
         console.log(`[Mirror Bot Startup Loader] Skipping startup for ${b.botUsername || b.token.substring(0,8)} due to Integration Points quota limit exceeded for this month.`);
       }
