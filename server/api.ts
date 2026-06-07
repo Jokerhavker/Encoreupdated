@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import axios from 'axios';
 import { Telegraf } from 'telegraf';
-import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest } from './db.js';
+import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest, setCachedAppUrl } from './db.js';
 import { getBot, setupWebhook } from './bot.js';
 import { 
   startMirrorBot, 
@@ -1202,6 +1202,9 @@ apiRouter.post('/api/settings', async (req, res) => {
   const { settings } = req.body;
   for (const s of settings) {
     await Setting.findOneAndUpdate({ key: s.key }, { value: s.value }, { upsert: true });
+    if (s.key === 'appUrl') {
+      setCachedAppUrl(s.value ? String(s.value) : null);
+    }
   }
   res.json({ success: true });
 });

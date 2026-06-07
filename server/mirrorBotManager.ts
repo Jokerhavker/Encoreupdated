@@ -1,7 +1,7 @@
 import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
 import mongoose from "mongoose";
-import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest, UsedTransaction, Coupon } from "./db.js";
+import { MirrorBot, Command, BotUser, BotGroup, Setting, Statlog, PendingAction, connectDB, MirrorWallet, MirrorWithdrawalRequest, UsedTransaction, Coupon, getCachedAppUrl } from "./db.js";
 import { isMemberOfChannel } from "./bot.js";
 
 const activeMirroredBots = new Map<string, Telegraf>();
@@ -155,9 +155,16 @@ export async function checkAndResetIntegrationPoints(botDoc: any): Promise<boole
 // Setup a mirrored bot dynamic event handlers
 export async function startMirrorBot(mirrorBotDoc: any) {
   const token = mirrorBotDoc.token;
+  let wasRunning = false;
   if (activeMirroredBots.has(token)) {
     console.log(`[Mirror Bot Manager] Re-starting bot and stopping old poller for token: ${token.substring(0, 10)}...`);
+    wasRunning = true;
     stopMirrorBot(token);
+  }
+
+  if (wasRunning) {
+    // Wait for the previous Telegraf poller to fully stop before launching a new polling connection
+    await new Promise(resolve => setTimeout(resolve, 1500));
   }
 
   const bot = new Telegraf(token);
@@ -407,6 +414,10 @@ export async function startMirrorBot(mirrorBotDoc: any) {
 
     const keyboard = {
       inline_keyboard: [
+        [
+          { text: "🏰 My Group Stats", callback_data: "view_my_groups" },
+          { text: "📜 Purchase History", callback_data: "view_purchase_history" }
+        ],
         [{ text: "🔙 Back to Main", callback_data: "view_start" }]
       ]
     };
@@ -1186,6 +1197,101 @@ export async function startMirrorBot(mirrorBotDoc: any) {
   bot.action("view_shop", showMirrorShop);
   bot.action("view_start", showMirrorStart);
 
+  bot.action("view_purchase_history", async (ctx) => {
+    try {
+      const userId = String(ctx.from?.id);
+      const userDoc = await BotUser.findOne({ telegramId: userId });
+      if (!userDoc) {
+        await ctx.answerCbQuery("User profile not found").catch(() => ({}));
+        return;
+      }
+
+      let histText = "📜 *Your Purchase History* 📜\n\n";
+      const history = userDoc.purchaseHistory || [];
+
+      if (history.length === 0) {
+        histText += "ℹ️ _You haven't made any purchases yet. Use_ /shop _to unlock premium tools!_";
+      } else {
+        const sortedHistory = [...history].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 8);
+        
+        sortedHistory.forEach((item: any, idx: number) => {
+          const dateStr = item.date ? new Date(item.date).toLocaleDateString("en-IN", { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : "N/A";
+          histText += `*${idx + 1}. ${item.productName || item.productId}*\n`;
+          histText += `   📅 Date: \`${dateStr}\` | 💰 Price: *₹${item.price}*\n`;
+          histText += `   🆔 UTR: \`${item.utr || item.transactionId || 'Completed'}\`\n\n`;
+        });
+        
+        if (history.length > 8) {
+          histText += `_Showing latest 8 of ${history.length} transactions._`;
+        }
+      }
+
+      await ctx.editMessageText(histText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "👤 Back to Profile", callback_data: "view_profile" }],
+            [{ text: "🔙 Go to Start Menu", callback_data: "view_start" }]
+          ]
+        }
+      }).catch(() => {});
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (err: any) {
+      console.error("[Mirror Purchase history action err]", err);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading purchase history").catch(() => ({}));
+    }
+  });
+
+  bot.action("view_my_groups", async (ctx) => {
+    try {
+      const userId = String(ctx.from?.id);
+      const groups = await BotGroup.find({ ownerId: userId }).sort({
+        interactions: -1,
+      });
+
+      if (groups.length === 0) {
+        await ctx.answerCbQuery("You have not added the bot to any groups yet.", {
+          show_alert: true,
+        }).catch(() => ({}));
+        return;
+      }
+
+      let txt = `🏰 *Your Groups*\n\n`;
+
+      groups.forEach((g: any, i: number) => {
+        txt += `${i + 1}. *${g.title || "Unknown Group"}*\n`;
+        txt += `   └ ID: \`${g.telegramId}\`\n`;
+
+        const used = g.dailyUsed || 0;
+        const limit = g.dailyLimit || 50;
+        txt += `   └ Daily Used: ${used} / ${limit}\n`;
+
+        // Generate an inline text-based progress bar
+        const ratio = limit > 0 ? used / limit : 0;
+        const filledBars = Math.min(Math.max(Math.round(ratio * 10), 0), 10);
+        const emptyBars = 10 - filledBars;
+        const barStr = "█".repeat(filledBars) + "░".repeat(emptyBars);
+        const percentage = Math.round(ratio * 100);
+
+        txt += `   └ Usage: \`${barStr}\` ${percentage}%\n`;
+        txt += `   └ Total Interactions: ${g.interactions}\n\n`;
+      });
+
+      await ctx.editMessageText(txt, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔙 Back to Profile", callback_data: "view_profile" }],
+          ],
+        },
+      }).catch(() => {});
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (e: any) {
+      console.error("[Mirror Group stats action err]", e);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading groups").catch(() => ({}));
+    }
+  });
+
   // 2. Incoming text messages router
   bot.on("text", async (ctx) => {
     const text = ctx.message.text.trim();
@@ -1742,6 +1848,8 @@ async function executeCommandCore(ctx: any, userCommand: string, param: string, 
 }
 
 export function getAppUrl(): string {
+  const cached = getCachedAppUrl();
+  if (cached) return cached;
   const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
   if (vercelUrl) return `https://${vercelUrl}`;
   return process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";

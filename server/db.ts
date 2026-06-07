@@ -202,8 +202,26 @@ export const MirrorBot = (mongoose.models.MirrorBot || mongoose.model('MirrorBot
 export const MirrorWallet = (mongoose.models.MirrorWallet || mongoose.model('MirrorWallet', MirrorWalletSchema, 'encore_mirror_wallets')) as mongoose.Model<any>;
 export const MirrorWithdrawalRequest = (mongoose.models.MirrorWithdrawalRequest || mongoose.model('MirrorWithdrawalRequest', MirrorWithdrawalRequestSchema, 'encore_mirror_withdrawal_requests')) as mongoose.Model<any>;
 
+let cachedAppUrl: string | null = null;
+export function getCachedAppUrl(): string | null {
+  return cachedAppUrl;
+}
+export function setCachedAppUrl(url: string | null) {
+  cachedAppUrl = url;
+}
+
 export async function connectDB() {
-  if (mongoose.connection.readyState >= 1) return;
+  if (mongoose.connection.readyState >= 1) {
+    if (!cachedAppUrl) {
+      try {
+        const s = await mongoose.models.Setting.findOne({ key: 'appUrl' });
+        if (s && s.value) {
+          cachedAppUrl = String(s.value);
+        }
+      } catch (e) {}
+    }
+    return;
+  }
   if (!process.env.MONGODB_URI) {
     console.warn("MONGODB_URI is not set. Database operations will fail.");
     return;
@@ -211,6 +229,15 @@ export async function connectDB() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log("MongoDB Connected successfully");
+    
+    // Cache the application public webapp url dynamically
+    try {
+      const s = await mongoose.models.Setting.findOne({ key: 'appUrl' });
+      if (s && s.value) {
+        cachedAppUrl = String(s.value);
+        console.log(`[Database Startup] Loaded cached webapp public URL: ${cachedAppUrl}`);
+      }
+    } catch (err) {}
   } catch (error) {
     console.error("MongoDB connection Error:", error);
   }

@@ -7,6 +7,7 @@ export function Settings() {
   const [defaultGroupCredits, setDefaultGroupCredits] = useState<number>(50);
   const [monetagEnabled, setMonetagEnabled] = useState<boolean>(true);
   const [adGapMinutes, setAdGapMinutes] = useState<number>(10);
+  const [appUrl, setAppUrl] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [webhookStatus, setWebhookStatus] = useState<{loading: boolean, result: any}>({ loading: false, result: null });
 
@@ -33,6 +34,11 @@ export function Settings() {
           setAdGapMinutes(Number(adGapSetting.value));
       }
       
+      const appUrlSetting = res.data.find((s: any) => s.key === 'appUrl');
+      if (appUrlSetting) {
+          setAppUrl(String(appUrlSetting.value || ''));
+      }
+      
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
@@ -44,7 +50,8 @@ export function Settings() {
           { key: 'forceChannels', value: channels },
           { key: 'defaultGroupCredits', value: defaultGroupCredits },
           { key: 'rewardSettings', value: { Monetag: monetagEnabled } },
-          { key: 'adGapMinutes', value: adGapMinutes }
+          { key: 'adGapMinutes', value: adGapMinutes },
+          { key: 'appUrl', value: appUrl.trim() }
         ]
       });
       alert('Settings saved successfully!');
@@ -107,6 +114,20 @@ export function Settings() {
              onChange={e => setAdGapMinutes(Number(e.target.value))}
              className="w-full max-w-[200px] border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
              placeholder="10"
+          />
+        </div>
+
+        <div className="pt-4 border-t border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-700 mb-1">Public WebApp Base URL (No Google Sign-In)</h3>
+          <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+            Specify your custom public production domain name (e.g. <code>https://my-active-bot-app.com</code> or your deployed Vercel/Cloud Run URL) to bypass Google Account sign-in prompts inside the built-in Telegram WebApp screen. Must start with <code>https://</code>.
+          </p>
+          <input 
+             type="url"
+             value={appUrl}
+             onChange={e => setAppUrl(e.target.value)}
+             className="w-full max-w-sm border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white text-gray-800"
+             placeholder="https://your-public-site-url.com"
           />
         </div>
 

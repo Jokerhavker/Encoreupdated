@@ -9,10 +9,13 @@ import {
   PendingAction,
   UsedTransaction,
   Coupon,
+  getCachedAppUrl,
 } from "./db.js";
 
 // Helper to resolve active preview/prod domain dynamically
 export function getAppUrl(): string {
+  const cached = getCachedAppUrl();
+  if (cached) return cached;
   const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
   if (vercelUrl) return `https://${vercelUrl}`;
   return process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";
