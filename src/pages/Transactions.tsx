@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Info, CheckCircle2, XCircle, Tag } from 'lucide-react';
+import { Search, Info, CheckCircle2, XCircle, Tag, Trash2 } from 'lucide-react';
 
 export function Transactions() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -21,6 +21,24 @@ export function Transactions() {
     } catch (e) {
       console.error("Failed to load transactions", e);
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteTransaction = async (id: string, utrStr?: string) => {
+    if (!window.confirm(`Are you sure you want to permanently delete this transaction record from the master logs? This will also remove any double-spent keys and cannot be undone.`)) {
+      return;
+    }
+    try {
+      setLoading(true);
+      const res = await axios.delete(`/api/transactions/${id}`);
+      if (res.data?.success) {
+        alert(res.data.message || 'Transaction deleted successfully.');
+        fetchTransactions();
+      }
+    } catch (e: any) {
+      console.error("Failed to delete transaction", e);
+      alert(e.response?.data?.error || 'Failed to delete transaction.');
       setLoading(false);
     }
   };
@@ -180,12 +198,20 @@ export function Transactions() {
                       <td className="px-6 py-4 text-center font-mono text-xs text-gray-500 whitespace-nowrap">
                         {dateStr}
                       </td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-6 py-4 text-right flex items-center justify-end gap-2.5">
                         <button
                           onClick={() => setSelectedTxn(txn)}
-                          className="p-1.5 bg-gray-50 text-indigo-600 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-200 rounded-md cursor-pointer transition"
+                          className="p-1.5 bg-gray-50 text-indigo-600 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-200 rounded-md cursor-pointer transition mr-0.5"
+                          title="View Details"
                         >
                           <Info className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTransaction(txn.purchaseHistoryId || txn.transactionId || txn.utr)}
+                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 hover:border-red-200 rounded-md cursor-pointer transition"
+                          title="Delete Transaction"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </td>
                     </tr>

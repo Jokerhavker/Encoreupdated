@@ -146,11 +146,13 @@ const MirrorBotSchema = new mongoose.Schema({
     apiUrl: { type: String },
     isCreditBased: { type: Boolean, default: false },
     defaultDailyCredits: { type: Number, default: 0 },
-    decoratedMessage: { type: String }
+    decoratedMessage: { type: String },
+    autoDeleteMs: { type: Number, default: 0 }
   }],
   commandCreditsOverrides: [{
     command: String,
-    dailyLimit: Number
+    dailyLimit: Number,
+    autoDeleteMs: Number
   }],
   bannedUsers: [{ type: String, default: [] }],
   bannedGroups: [{ type: String, default: [] }],

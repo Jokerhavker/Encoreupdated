@@ -8,14 +8,60 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+const PlanCountdown = ({ expiresAt }: { expiresAt?: string }) => {
+  const [timeLeft, setTimeLeft] = useState('');
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    const updateCountdown = () => {
+      const diff = new Date(expiresAt).getTime() - Date.now();
+      if (diff <= 0) {
+        setTimeLeft('Expired');
+        return;
+      }
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      if (days > 0) {
+        setTimeLeft(`${days}d ${hours}h ${minutes}m`);
+      } else if (hours > 0) {
+        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+      } else {
+        setTimeLeft(`${minutes}m ${seconds}s`);
+      }
+    };
+
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+
+  if (!expiresAt) return null;
+  return (
+    <span className="text-[10px] text-amber-600 font-bold block mt-1 animate-pulse">
+      ⏳ Expires in: {timeLeft}
+    </span>
+  );
+};
+
 export function MirrorManager() {
   // Query param auto-fill
   const getQueryUserId = () => {
     return new URLSearchParams(window.location.search).get('userid') || '';
   };
 
+  const getAutoTelegramId = () => {
+    const queryId = getQueryUserId();
+    if (queryId) return queryId;
+    const tgUserId = (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.id;
+    if (tgUserId) return String(tgUserId);
+    return localStorage.getItem('mirror_owner_id') || '';
+  };
+
   // State Management
-  const [ownerTelegramId, setOwnerTelegramId] = useState(getQueryUserId() || localStorage.getItem('mirror_owner_id') || '');
+  const [ownerTelegramId, setOwnerTelegramId] = useState(getAutoTelegramId());
   const [token, setToken] = useState(localStorage.getItem('mirror_bot_token') || '');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [botDetail, setBotDetail] = useState<any>(null);
@@ -74,7 +120,17 @@ export function MirrorManager() {
 
   // Page inputs
   const [tempTokenInput, setTempTokenInput] = useState('');
-  const [tempUserIdInput, setTempUserIdInput] = useState(getQueryUserId() || localStorage.getItem('mirror_owner_id') || '');
+  const [tempUserIdInput, setTempUserIdInput] = useState(getAutoTelegramId());
+
+  // Mount effect to load and double verify auto logon context
+  useEffect(() => {
+    const autoId = getAutoTelegramId();
+    if (autoId) {
+      setOwnerTelegramId(autoId);
+      setTempUserIdInput(autoId);
+      localStorage.setItem('mirror_owner_id', autoId);
+    }
+  }, []);
 
   // Sub-tab operational states
   const [customBotName, setCustomBotName] = useState('');
@@ -89,6 +145,7 @@ export function MirrorManager() {
   const [newCmdCredit, setNewCmdCredit] = useState(false);
   const [newCmdCost, setNewCmdCost] = useState(0);
   const [newCmdDecorator, setNewCmdDecorator] = useState('{{api.response}}');
+  const [newCmdAutoDeleteSeconds, setNewCmdAutoDeleteSeconds] = useState(0);
   const [defaultCommands, setDefaultCommands] = useState<any[]>([]);
 
   // Ban list form
@@ -286,7 +343,7 @@ export function MirrorManager() {
   };
 
   // Handle saving global override
-  const handleSaveGlobalOverride = async (cmd: string, val: number) => {
+  const handleSaveGlobalOverride = async (cmd: string, val?: number, deleteMs?: number) => {
     if (!token || !cmd) return;
     setLoading(true);
     setSuccessMsg('');
@@ -295,14 +352,15 @@ export function MirrorManager() {
       const res = await axios.post('/api/mirror-bots/update-overrides', {
         token,
         command: cmd,
-        dailyLimit: val
+        dailyLimit: val,
+        autoDeleteMs: deleteMs
       });
       if (res.data?.success) {
         setSuccessMsg(res.data.message || 'Global override limits updated successfully!');
         setBotDetail(res.data.bot);
       }
     } catch (err: any) {
-      setErrorMsg(err.response?.data?.error || 'Failed updating command credentials override limit.');
+      setErrorMsg(err.response?.data?.error || 'Failed updating command credentials override.');
     } finally {
       setLoading(false);
     }
@@ -550,7 +608,8 @@ export function MirrorManager() {
         apiUrl: newCmdApi.trim(),
         isCreditBased: newCmdCredit,
         defaultDailyCredits: Number(newCmdCost),
-        decoratedMessage: newCmdDecorator.trim()
+        decoratedMessage: newCmdDecorator.trim(),
+        autoDeleteSeconds: newCmdAutoDeleteSeconds > 0 ? Number(newCmdAutoDeleteSeconds) : null
       });
 
       if (res.data?.success) {
@@ -566,6 +625,7 @@ export function MirrorManager() {
         setNewCmdCredit(false);
         setNewCmdCost(0);
         setNewCmdDecorator('{{api.response}}');
+        setNewCmdAutoDeleteSeconds(0);
       }
     } catch (err: any) {
       setErrorMsg(err.response?.data?.error || 'Failed saving dynamic custom API command.');
@@ -686,13 +746,23 @@ export function MirrorManager() {
                   <Users className="w-3 h-3 text-indigo-500" />
                   Your Telegram Numeric User ID
                 </label>
-                <input 
-                  type="text" 
-                  value={tempUserIdInput}
-                  onChange={(e) => setTempUserIdInput(e.target.value)}
-                  placeholder="e.g. 590981446"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    value={tempUserIdInput}
+                    readOnly
+                    placeholder="Auto-detecting ID from Telegram..."
+                    className="w-full border border-gray-200 bg-gray-50/80 rounded-lg px-3 py-2.5 text-xs font-mono focus:outline-none cursor-not-allowed text-gray-500"
+                  />
+                  {tempUserIdInput && (
+                    <span className="absolute right-3 top-2.5 bg-emerald-100 text-emerald-800 font-bold text-[9px] px-1.5 py-0.5 rounded uppercase select-none">
+                      Secured
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-gray-450 mt-1 font-medium">
+                  {tempUserIdInput ? "🔑 Auto-login active: Your Telegram ID is locked and verified." : "⚠️ Warning: Telegram ID was not detected. Please verify you are loading this inside your robot's Telegram Web App."}
+                </p>
               </div>
             </div>
 
@@ -1079,6 +1149,9 @@ export function MirrorManager() {
                   <div className="p-3.5 bg-gray-50 rounded-lg space-y-1 select-none">
                     <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">Plan Name</p>
                     <p className="font-extrabold text-indigo-600 uppercase">{activePlan}</p>
+                    {activePlan !== 'free' && botDetail?.expiresAt && (
+                      <PlanCountdown expiresAt={botDetail.expiresAt} />
+                    )}
                   </div>
 
                   <div className="p-3.5 bg-gray-50 rounded-lg space-y-1">
@@ -1093,11 +1166,11 @@ export function MirrorManager() {
 
                   <div className="p-3.5 bg-gray-50 rounded-lg space-y-1">
                     <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">Forced Subscribe Limits</p>
-                    <p className="font-extrabold text-indigo-900 flex items-center gap-1">
-                      {activePlan === 'free' ? 'None (Only Main Group Locked @encorexosint)' : ''}
-                      {activePlan === 'silver' ? 'Upto 1 Custom Forced Channel (+ Main)' : ''}
-                      {activePlan === 'gold' ? 'Upto 2 Custom Forced Channels (+ Main)' : ''}
-                      {activePlan === 'max' ? 'Upto 5 Custom Forced Channels (+ Main)' : ''}
+                    <p className="font-extrabold text-indigo-900 flex flex-col gap-0.5 justify-center">
+                      {activePlan === 'free' && <span>None (Only Main Group Locked @encorexosint)</span>}
+                      {activePlan === 'silver' && <span>Up to 1 Custom Forced Channel (+ Main Channel)</span>}
+                      {activePlan === 'gold' && <span>Up to 2 Custom Forced Channels (+ Main Channel)</span>}
+                      {activePlan === 'max' && <span>Up to 5 Custom Forced Channels (Main Channel Bypass Active 🔓)</span>}
                     </p>
                   </div>
 
@@ -1235,7 +1308,7 @@ export function MirrorManager() {
                     </div>
                     <div>
                       <p className="text-xs font-extrabold text-amber-950">@encorexosint (Main Channel)</p>
-                      <p className="text-[10px] text-amber-800 font-medium">Constant forced join channel (Locked for all Clonal Plans).</p>
+                      <p className="text-[10px] text-amber-800 font-medium">Constant forced join channel (Locked for Free, Silver, and Gold plans only).</p>
                     </div>
                   </div>
                   <span className="text-[9px] font-sans font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded uppercase flex items-center gap-1">
@@ -1360,8 +1433,12 @@ export function MirrorManager() {
                     const isEditableInPlan = isMax || !!allowedEditConfig;
                     const maxLimit = isMax ? 'No limit' : (allowedEditConfig ? `Up to ${allowedEditConfig.maxLimit}` : '');
 
-                    const currentOverride = botDetail?.commandCreditsOverrides?.find((co: any) => co.command === cmd.command)?.dailyLimit;
+                    const currentOverrideObj = botDetail?.commandCreditsOverrides?.find((co: any) => co.command === cmd.command);
+                    const currentOverride = currentOverrideObj?.dailyLimit;
                     const activeLimit = currentOverride !== undefined ? currentOverride : cmd.defaultDailyCredits;
+
+                    const activeAutoDelete = currentOverrideObj?.autoDeleteMs !== undefined ? currentOverrideObj.autoDeleteMs : (cmd.autoDeleteMs || 0);
+                    const activeAutoDeleteSeconds = activeAutoDelete < 1000 ? activeAutoDelete : Math.floor(activeAutoDelete / 1000);
 
                     return (
                       <div key={cmd.command} className="bg-gray-50 rounded-lg border border-gray-100 p-3.5 flex flex-col justify-between gap-3 text-xs">
@@ -1373,6 +1450,11 @@ export function MirrorManager() {
                               </p>
                               <p className="text-[10px] text-gray-400 font-semibold mt-0.5">Regular Daily Credits Limit: {cmd.defaultDailyCredits || 0}</p>
                               <p className="text-[10px] text-indigo-600 font-bold mt-0.5">Current Active Quota Limit: {activeLimit}</p>
+                              {activeAutoDeleteSeconds > 0 ? (
+                                <p className="text-[10px] text-amber-600 font-bold mt-0.5">⏱️ Auto-delete messages: {activeAutoDeleteSeconds}s</p>
+                              ) : (
+                                <p className="text-[10px] text-gray-400 font-medium mt-0.5">⏱️ Auto-delete disabled</p>
+                              )}
                             </div>
                             {activePlan !== 'free' && (
                               <button
@@ -1389,28 +1471,45 @@ export function MirrorManager() {
                           </div>
                         </div>
 
-                        {/* Inline limit override if allowed in their plan */}
+                        {/* Inline limit and auto-delete override if allowed in their plan */}
                         {isEditableInPlan ? (
-                          <div className="border-t pt-2 flex items-center justify-between gap-2.5 bg-white p-2 rounded border border-gray-100">
-                            <span className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-950">
-                              Edit Limit {maxLimit && <span className="text-gray-400">({maxLimit})</span>}
+                          <div className="border-t pt-2 bg-white p-3 rounded-lg border border-gray-100 space-y-2">
+                            <span className="text-[10px] uppercase tracking-wider font-extrabold text-indigo-950 block">
+                              Edit Settings {maxLimit && <span className="text-gray-400 font-normal">({maxLimit})</span>}
                             </span>
-                            <div className="flex gap-1.5 items-center">
-                              <input
-                                type="number"
-                                placeholder={activeLimit.toString()}
-                                className="bg-white border rounded font-mono px-1.5 py-0.5 text-xs w-20 text-center focus:outline-none"
-                                id={`cmd-limit-input-${cmd.command}`}
-                              />
+                            <div className="flex flex-wrap items-end gap-3 justify-between">
+                              <div className="space-y-1">
+                                <label className="block text-[8px] uppercase font-bold text-gray-400">Daily limit</label>
+                                <input
+                                  type="number"
+                                  placeholder={activeLimit.toString()}
+                                  className="bg-white border rounded font-mono px-2 py-1 text-xs w-20 text-center focus:outline-none"
+                                  id={`cmd-limit-input-${cmd.command}`}
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="block text-[8px] uppercase font-bold text-gray-400">Auto Delete (Sec)</label>
+                                <input
+                                  type="number"
+                                  placeholder={activeAutoDeleteSeconds > 0 ? activeAutoDeleteSeconds.toString() : 'Disabled'}
+                                  className="bg-white border rounded font-mono px-2 py-1 text-xs w-24 text-center focus:outline-none"
+                                  id={`cmd-autodelete-input-${cmd.command}`}
+                                />
+                              </div>
                               <button
                                 onClick={() => {
-                                  const valStr = (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement)?.value;
-                                  if (valStr) {
-                                    handleSaveGlobalOverride(cmd.command, Number(valStr));
-                                    (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement).value = '';
-                                  }
+                                  const limitStr = (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement)?.value;
+                                  const autoDelStr = (document.getElementById(`cmd-autodelete-input-${cmd.command}`) as HTMLInputElement)?.value;
+                                  
+                                  const newLimit = limitStr ? Number(limitStr) : undefined;
+                                  const newAutoDelMs = autoDelStr !== "" ? Number(autoDelStr) * 1000 : undefined;
+                                  
+                                  handleSaveGlobalOverride(cmd.command, newLimit, newAutoDelMs);
+                                  
+                                  if (limitStr) (document.getElementById(`cmd-limit-input-${cmd.command}`) as HTMLInputElement).value = '';
+                                  if (autoDelStr) (document.getElementById(`cmd-autodelete-input-${cmd.command}`) as HTMLInputElement).value = '';
                                 }}
-                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] px-2.5 py-1 rounded transition select-none cursor-pointer"
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] px-3 py-1.5 rounded transition select-none cursor-pointer h-8"
                               >
                                 Save
                               </button>
@@ -1418,7 +1517,7 @@ export function MirrorManager() {
                           </div>
                         ) : activePlan !== 'max' && (
                           <div className="text-[9px] text-gray-400 italic font-medium px-1 leading-normal">
-                            🔒 Upgrade to customize limits for {cmd.command}
+                            🔒 Upgrade to customize limits and timers for {cmd.command}
                           </div>
                         )}
                       </div>
@@ -1452,6 +1551,9 @@ export function MirrorManager() {
                               <p className="font-mono font-black text-indigo-600">{cc.command}</p>
                               <p className="text-gray-500 font-medium">{cc.description}</p>
                               <p className="text-[10px] text-gray-400 font-mono mt-0.5 truncate max-w-sm">GET: {cc.apiUrl}</p>
+                              {cc.autoDeleteMs > 0 && (
+                                <p className="text-[10px] text-amber-600 font-bold mt-1 font-mono">⏱️ Auto-delete response: {cc.autoDeleteMs / 1000}s</p>
+                              )}
                             </div>
                             <button
                               onClick={() => handleDeleteCustomCommand(cc.command)}
@@ -1466,7 +1568,7 @@ export function MirrorManager() {
 
                     {/* Creation Form */}
                     <form onSubmit={handleCreateCustomCommand} className="space-y-4 p-4 border rounded-xl bg-gray-50/50">
-                      <p className="text-xs font-bold text-gray-950">Add dynamic dynamic custom command:</p>
+                      <p className="text-xs font-bold text-gray-950">Add dynamic custom command:</p>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                         <div>
@@ -1527,7 +1629,7 @@ export function MirrorManager() {
 
                         {newCmdCredit && (
                           <div>
-                            <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Credits Cost Cost</label>
+                            <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Credits Cost</label>
                             <input 
                               type="number" 
                               value={newCmdCost}
@@ -1536,6 +1638,17 @@ export function MirrorManager() {
                             />
                           </div>
                         )}
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Response Auto-Delete (Seconds)</label>
+                          <input 
+                            type="number" 
+                            value={newCmdAutoDeleteSeconds || ''}
+                            onChange={(e) => setNewCmdAutoDeleteSeconds(e.target.value ? Number(e.target.value) : 0)}
+                            placeholder="e.g. 10 (Leave blank or 0 for none)"
+                            className="w-full border rounded px-2 py-1.5"
+                          />
+                        </div>
                       </div>
 
                       <button

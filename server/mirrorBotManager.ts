@@ -1762,7 +1762,39 @@ async function executeCommandCore(ctx: any, userCommand: string, param: string, 
         } catch (e) {}
       } else {
         // Block
-        await ctx.reply(`⚠️ *Daily Limit Reached*\n\nSorry, you have used all your daily credits (${usedToday}/${limit}) and common credits of this command. Please wait for tomorrow.`, replyOptions);
+        const buyBtn = {
+          text: "BUY CREDITS 💳",
+          url: "https://t.me/modifucker"
+        };
+        const limitText = `⚠️ *Daily Limit Reached*\n\n` +
+          `Sorry user, you have used all your daily credits (${usedToday}/${limit}) and common credits for this command. Please wait for tomorrow or increase your credits.`;
+
+        try {
+          await ctx.reply(limitText, {
+            ...replyOptions,
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [[buyBtn]]
+            }
+          });
+        } catch (_err) {
+          try {
+            await ctx.reply(limitText, {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [[buyBtn]]
+              }
+            });
+          } catch (_err2) {
+            const plainText = `⚠️ Daily Limit Reached\n\n` +
+              `Sorry user, you have used all your daily credits (${usedToday}/${limit}) and common credits for this command. Please wait for tomorrow or increase your credits.`;
+            await ctx.reply(plainText, {
+              reply_markup: {
+                inline_keyboard: [[buyBtn]]
+              }
+            }).catch(() => {});
+          }
+        }
         return;
       }
     } else {
@@ -1893,12 +1925,19 @@ async function executeCommandCore(ctx: any, userCommand: string, param: string, 
   }).catch(() => {});
 
   // Handle auto-delete
-  if (cmdDef.autoDeleteMs && cmdDef.autoDeleteMs > 0 && sentMsg) {
+  let effectiveAutoDeleteMs = cmdDef.autoDeleteMs || 0;
+  const override = mirrorBotDoc.commandCreditsOverrides?.find((o: any) => o.command === userCommand);
+  if (override && override.autoDeleteMs !== undefined) {
+    effectiveAutoDeleteMs = override.autoDeleteMs;
+  }
+
+  if (effectiveAutoDeleteMs > 0 && sentMsg) {
+    const delayMs = effectiveAutoDeleteMs < 1000 ? effectiveAutoDeleteMs * 1000 : effectiveAutoDeleteMs;
     setTimeout(async () => {
       try {
         await ctx.telegram.deleteMessage(ctx.chat.id, sentMsg.message_id);
       } catch (e) {}
-    }, cmdDef.autoDeleteMs * 1000);
+    }, delayMs);
   }
 }
 

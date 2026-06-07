@@ -290,13 +290,17 @@ apiRouter.post('/api/mirror-bots/update-user-credits', async (req, res) => {
 // Modify global commands limit overrides for this mirrored bot
 apiRouter.post('/api/mirror-bots/update-overrides', async (req, res) => {
   try {
-    const { token, command, dailyLimit } = req.body;
-    if (!token || !command || dailyLimit === undefined) {
-      return res.status(400).json({ error: 'Missing parameters' });
+    const { token, command, dailyLimit, autoDeleteMs } = req.body;
+    if (!token || !command) {
+      return res.status(400).json({ error: 'Missing token or command parameter' });
     }
 
     const botDoc = await MirrorBot.findOne({ token });
     if (!botDoc) return res.status(404).json({ error: 'Bot not found' });
+
+    if (botDoc.plan === 'free') {
+      return res.status(403).json({ error: 'Command overrides are restricted to SILVER subscription plans or higher.' });
+    }
 
     const tiersSetting = await Setting.findOne({ key: 'mirrorTiersConfig' });
     const tiers = tiersSetting?.value || [];
@@ -306,14 +310,7 @@ apiRouter.post('/api/mirror-bots/update-overrides', async (req, res) => {
 
     if (!isMax && !isCommandAllowed) {
       return res.status(403).json({ 
-        error: `Your current tier plan (${botDoc.plan.toUpperCase()}) does not authorize editing daily credit limit of ${command}. Upgrade subscription first.` 
-      });
-    }
-
-    const maxLimitAllowed = isMax ? 1000000 : (botPlan?.editableCommands?.find((ec: any) => ec.command === command)?.maxLimit || 100);
-    if (Number(dailyLimit) > maxLimitAllowed) {
-      return res.status(400).json({ 
-        error: `Your current ${botDoc.plan.toUpperCase()} tier allows configuring a limit up to ${maxLimitAllowed} daily credits for ${command}.` 
+        error: `Your current tier plan (${botDoc.plan.toUpperCase()}) does not authorize editing overrides of ${command}. Upgrade subscription first.` 
       });
     }
 
@@ -323,9 +320,36 @@ apiRouter.post('/api/mirror-bots/update-overrides', async (req, res) => {
     
     const existingIdx = botDoc.commandCreditsOverrides.findIndex((o: any) => o.command === command);
     if (existingIdx >= 0) {
-      botDoc.commandCreditsOverrides[existingIdx].dailyLimit = Number(dailyLimit);
+      if (dailyLimit !== undefined && dailyLimit !== null) {
+        const maxLimitAllowed = isMax ? 1000000 : (botPlan?.editableCommands?.find((ec: any) => ec.command === command)?.maxLimit || 100);
+        if (Number(dailyLimit) > maxLimitAllowed) {
+          return res.status(400).json({ 
+            error: `Your current ${botDoc.plan.toUpperCase()} tier allows configuring a limit up to ${maxLimitAllowed} daily credits for ${command}.` 
+          });
+        }
+        botDoc.commandCreditsOverrides[existingIdx].dailyLimit = Number(dailyLimit);
+      }
+      if (autoDeleteMs !== undefined && autoDeleteMs !== null) {
+        botDoc.commandCreditsOverrides[existingIdx].autoDeleteMs = Number(autoDeleteMs);
+      }
     } else {
-      botDoc.commandCreditsOverrides.push({ command, dailyLimit: Number(dailyLimit) });
+      let initDaily = dailyLimit !== undefined && dailyLimit !== null ? Number(dailyLimit) : 100;
+      if (dailyLimit === undefined || dailyLimit === null) {
+        const cmdDefObj = await Command.findOne({ command });
+        initDaily = cmdDefObj?.defaultDailyCredits || 50;
+      } else {
+        const maxLimitAllowed = isMax ? 1000000 : (botPlan?.editableCommands?.find((ec: any) => ec.command === command)?.maxLimit || 100);
+        if (Number(dailyLimit) > maxLimitAllowed) {
+          return res.status(400).json({ 
+            error: `Your current ${botDoc.plan.toUpperCase()} tier allows configuring a limit up to ${maxLimitAllowed} daily credits for ${command}.` 
+          });
+        }
+      }
+      botDoc.commandCreditsOverrides.push({ 
+        command, 
+        dailyLimit: initDaily,
+        autoDeleteMs: autoDeleteMs !== undefined && autoDeleteMs !== null ? Number(autoDeleteMs) : 0
+      });
     }
 
     botDoc.markModified('commandCreditsOverrides');
@@ -334,7 +358,7 @@ apiRouter.post('/api/mirror-bots/update-overrides', async (req, res) => {
     stopMirrorBot(token);
     await startMirrorBot(botDoc);
 
-    res.json({ success: true, bot: botDoc, message: 'Global bot daily credit limit updated successfully!' });
+    res.json({ success: true, bot: botDoc, message: 'Command overrides updated successfully!' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -447,7 +471,13 @@ apiRouter.post('/api/mirror-bots/update', async (req, res) => {
     // Validate Force Channels maximum allowance based on Plan
     if (forceChannels && Array.isArray(forceChannels)) {
       const allowedCount = getMaxForceChannels(botDoc.plan);
-      if (forceChannels.length > allowedCount) {
+      const filteredChannels = forceChannels.filter((ch: any) => {
+        const username = typeof ch === 'string' ? ch : (ch.username || ch.id || '');
+        const norm = username.trim().toLowerCase().replace(/^@/, '');
+        return norm !== 'encorexosint';
+      });
+
+      if (filteredChannels.length > allowedCount) {
         return res.status(400).json({ 
           error: `Under your ${botDoc.plan.toUpperCase()} plan, you can only set up to ${allowedCount} custom forced subscription channels. Please upgrade for more!` 
         });
@@ -564,7 +594,7 @@ apiRouter.post('/api/mirror-bots/toggle-command', async (req, res) => {
 // Add custom API-based command (Silver+ feature)
 apiRouter.post('/api/mirror-bots/custom-command', async (req, res) => {
   try {
-    const { token, command, description, apiUrl, isCreditBased, defaultDailyCredits, decoratedMessage } = req.body;
+    const { token, command, description, apiUrl, isCreditBased, defaultDailyCredits, decoratedMessage, autoDeleteSeconds } = req.body;
     if (!token || !command || !apiUrl) {
       return res.status(400).json({ error: 'Missing required command properties' });
     }
@@ -591,13 +621,14 @@ apiRouter.post('/api/mirror-bots/custom-command', async (req, res) => {
     // Find and update, or push
     let customList = botDoc.customCommands || [];
     const idx = customList.findIndex((c: any) => c.command === cleanCmd);
-    const cmdPayload = {
+    const cmdPayload: any = {
       command: cleanCmd,
       description: description || '',
       apiUrl: apiUrl.trim(),
       isCreditBased: !!isCreditBased,
       defaultDailyCredits: defaultDailyCredits != null ? Number(defaultDailyCredits) : 0,
-      decoratedMessage: decoratedMessage || '{{api.response}}'
+      decoratedMessage: decoratedMessage || '{{api.response}}',
+      autoDeleteMs: autoDeleteSeconds != null ? Number(autoDeleteSeconds) * 1000 : 0
     };
 
     if (idx >= 0) {
@@ -1046,6 +1077,7 @@ apiRouter.get('/api/transactions', async (req, res) => {
           telegramId: "$telegramId",
           firstName: "$firstName",
           username: "$username",
+          purchaseHistoryId: "$purchaseHistory._id",
           productId: "$purchaseHistory.productId",
           productName: "$purchaseHistory.productName",
           price: "$purchaseHistory.price",
@@ -1058,6 +1090,52 @@ apiRouter.get('/api/transactions', async (req, res) => {
       { $sort: { date: -1 } }
     ]);
     res.json(transactions);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete target transaction record from user account purchase logs and used transaction list
+apiRouter.delete('/api/transactions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing transaction identifier.' });
+    }
+
+    const isOid = mongoose.Types.ObjectId.isValid(id);
+    const idQuery = isOid ? new mongoose.Types.ObjectId(id) : null;
+
+    // Pull from BotUser purchase history arrays matching either subdocument _id, transactionId, or utr
+    await BotUser.updateMany(
+      {
+        $or: [
+          { "purchaseHistory._id": idQuery },
+          { "purchaseHistory.transactionId": id },
+          { "purchaseHistory.utr": id }
+        ]
+      },
+      {
+        $pull: {
+          purchaseHistory: {
+            $or: [
+              { _id: idQuery },
+              { transactionId: id },
+              { utr: id }
+            ]
+          }
+        }
+      }
+    );
+
+    // Also remove from double-spend safety list (UsedTransaction table) to free up the transaction ID for future re-verification/testing
+    await UsedTransaction.deleteMany({
+      $or: [
+        { transactionId: id }
+      ]
+    });
+
+    res.json({ success: true, message: 'Transaction record successfully cleared from master records.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
