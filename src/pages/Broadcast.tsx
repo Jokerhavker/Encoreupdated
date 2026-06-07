@@ -76,6 +76,16 @@ export function Broadcast() {
     setLoading(false);
   };
 
+  const handleCancelBroadcast = async (id: string) => {
+    if (!window.confirm("Are you sure you want to cancel this ongoing broadcast?")) return;
+    try {
+      await axios.post('/api/broadcast/cancel', { id });
+      fetchHistory();
+    } catch (e: any) {
+      alert("Error cancelling broadcast: " + (e.response?.data?.error || e.message));
+    }
+  };
+
   const ongoingBroadcasts = history.filter(item => item.status === 'sending');
   const completedBroadcasts = history.filter(item => item.status !== 'sending');
 
@@ -141,6 +151,15 @@ export function Broadcast() {
                       <p className="text-[10px] text-red-600 font-mono mt-0.5">⚠️ {item.failedGroups} groups failed to deliver</p>
                     )}
                   </div>
+                </div>
+
+                <div className="pt-3 border-t border-amber-100 flex justify-end">
+                  <button
+                    onClick={() => handleCancelBroadcast(item._id)}
+                    className="w-full bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 font-bold text-xs py-1.5 px-3 rounded-lg border border-red-200 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    🛑 Cancel Broadcast
+                  </button>
                 </div>
               </div>
             ))}

@@ -1341,6 +1341,30 @@ apiRouter.post('/api/broadcast', async (req, res) => {
   }
 });
 
+apiRouter.post('/api/broadcast/cancel', async (req, res) => {
+  const { id } = req.body;
+  if (!id) {
+    return res.status(400).json({ error: 'No broadcast ID provided' });
+  }
+  try {
+    const entry = await BroadcastHistory.findById(id);
+    if (!entry) {
+      return res.status(404).json({ error: 'Broadcast history not found' });
+    }
+    if (entry.status !== 'sending') {
+      return res.status(400).json({ error: 'This broadcast is not currently ongoing' });
+    }
+    
+    entry.status = 'cancelled';
+    await entry.save();
+    
+    console.log(`[Broadcast Cancel] Cancelled is requested and updated to Mongo for entry ID: ${id}`);
+    res.json({ success: true, message: 'Broadcast cancellation signal sent successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function sendTelegramMessageSafe(
@@ -1348,37 +1372,54 @@ async function sendTelegramMessageSafe(
   chatId: string,
   message: string,
   reply_markup: any,
-  retries = 3
+  retries = 2
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      if (!botInstance || !botInstance.telegram) {
+        return false;
+      }
       await botInstance.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown', reply_markup });
       return true;
     } catch (err: any) {
+      const errorCode = err.code || err.response?.error_code || err.response?.status;
+      const desc = (err.description || err.message || "").toLowerCase();
+
+      // Check for Rate Limit (429)
       const isRateLimit =
-        err.code === 429 ||
-        err.response?.error_code === 429 ||
-        (err.description && err.description.includes('Too Many Requests'));
+        errorCode === 429 ||
+        desc.includes('too many requests') ||
+        desc.includes('retry_after');
 
       if (isRateLimit) {
-        const retryAfter = err.parameters?.retry_after || 5;
-        console.warn(`[Broadcast Rate Limit] Hit 429. Waiting for ${retryAfter} seconds before retry. Chat ID: ${chatId}`);
-        await sleep(retryAfter * 1000 + 500);
+        const retryAfter = err.parameters?.retry_after || 4;
+        console.warn(`[Broadcast Rate Limit] Hit 429. Waiting for ${retryAfter}s. Chat: ${chatId}`);
+        await sleep(retryAfter * 1000 + 300);
         continue; // retry
       }
 
-      const desc = err.description || err.message || "";
-      if (
+      // Check for permanent failures (400, 403, 401, etc.)
+      const isPermanent =
+        errorCode === 400 ||
+        errorCode === 403 ||
+        errorCode === 401 ||
         desc.includes('blocked') ||
+        desc.includes('forbidden') ||
         desc.includes('not found') ||
         desc.includes('deactivated') ||
         desc.includes('chat not found') ||
         desc.includes('kicked') ||
-        desc.includes('not a member')
-      ) {
+        desc.includes('not a member') ||
+        desc.includes('peer_id_invalid') ||
+        desc.includes('user is deactivated') ||
+        desc.includes('bot was blocked') ||
+        desc.includes('is deleted');
+
+      if (isPermanent) {
         return false;
       }
 
+      // Small sleep before generic retries
       await sleep(100);
     }
   }
@@ -1483,34 +1524,27 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
       reply_markup = { inline_keyboard: [[inlineBtn]] };
     }
 
-    // Rate-limited chunk and thread-safe DB committer
-    let isSaving = false;
-    let pendingSave = false;
-
-    const commitProgress = async () => {
-      historyEntry.successUsers = successUsers;
-      historyEntry.failedUsers = failedUsers;
-      historyEntry.successGroups = successGroups;
-      historyEntry.failedGroups = failedGroups;
-      await historyEntry.save();
-    };
-
-    const throttledCommitProgress = async () => {
-      if (isSaving) {
-        pendingSave = true;
-        return;
+    let lastCommitTime = 0;
+    const commitProgress = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastCommitTime < 1000) {
+        return; // debounce DB writes to max 1 update per second
       }
-      isSaving = true;
+      lastCommitTime = now;
       try {
-        await commitProgress();
+        await BroadcastHistory.updateOne(
+          { _id: historyId },
+          {
+            $set: {
+              successUsers,
+              failedUsers,
+              successGroups,
+              failedGroups
+            }
+          }
+        );
       } catch (err) {
-        console.error("[Broadcast Progress Save Error]", err);
-      } finally {
-        isSaving = false;
-        if (pendingSave) {
-          pendingSave = false;
-          setTimeout(throttledCommitProgress, 500);
-        }
+        console.error("[Broadcast Progress Update Error]", err);
       }
     };
 
@@ -1561,8 +1595,18 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
 
     // Define a rate-limited channel worker for a specific bot's queue
     const runWorkerForBot = async (botInstance: any, tasks: BroadcastTask[]) => {
-      const CHUNK_SIZE = 25; // Send 25 messages per chunk
+      // Use 15 concurrent requests for main bot, & 10 for cloned bots to stay perfectly compliant
+      const isMainBot = (botInstance === bot);
+      const CHUNK_SIZE = isMainBot ? 12 : 8; 
+
       for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
+        // Safe check for live cancellation status
+        const freshEntry = await BroadcastHistory.findById(historyId).select('status');
+        if (!freshEntry || freshEntry.status === 'cancelled') {
+          console.log(`[Broadcast Worker] Active cancellation signal caught for ID ${historyId}. Halting worker.`);
+          return;
+        }
+
         const chunk = tasks.slice(i, i + CHUNK_SIZE);
         const chunkStartTime = Date.now();
 
@@ -1579,13 +1623,16 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
           })
         );
 
-        throttledCommitProgress();
+        await commitProgress();
 
-        // Enforce maximum speed of 25 msgs/sec by sleeping the remainder of 1 second
+        // Safe spacing: rate-limits total throughput cleanly below limits
         const elapsed = Date.now() - chunkStartTime;
         const sleepTime = 1000 - elapsed;
         if (sleepTime > 0) {
           await sleep(sleepTime);
+        } else {
+          // yield CPU briefly to prevent execution locks
+          await sleep(50);
         }
       }
     };
@@ -1601,10 +1648,23 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
     await Promise.all(workers);
 
     // Final database update
-    const timeTakenMs = Date.now() - startTime;
-    historyEntry.status = 'completed';
-    historyEntry.timeTakenMs = timeTakenMs;
-    await commitProgress();
+    const finalEntry = await BroadcastHistory.findById(historyId);
+    if (finalEntry && finalEntry.status !== 'cancelled') {
+      const timeTakenMs = Date.now() - startTime;
+      await BroadcastHistory.updateOne(
+        { _id: historyId },
+        {
+          $set: {
+            status: 'completed',
+            timeTakenMs,
+            successUsers,
+            failedUsers,
+            successGroups,
+            failedGroups
+          }
+        }
+      );
+    }
   } catch (globalErr: any) {
     console.error("[Background broadcast fatal issue]", globalErr);
   }
