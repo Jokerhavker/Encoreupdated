@@ -142,8 +142,7 @@ async function generateSubCheckoutMessage(ctx: any, userId: string, matchedTier:
 
   const captionText = `🎫 *Subscription Checkout: ${matchedTier.name}*\n\n` +
     couponText +
-    `💰 *Payable Amount:* ₹${amount} / month\n` +
-    `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+    `💰 *Payable Amount:* ₹${amount} / month\n\n` +
     `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* (Fampay/PhonePe/GPay) to instantly verify your purchase:\n\n` +
     `Press cancel to terminate checkout:`;
 
@@ -353,8 +352,7 @@ async function handleCreditsQtyInput(ctx: any, userId: string, text: string) {
 
   const captionText = `⚡ *Checkout: Credits for ${cmd.command}*\n\n` +
     `📥 *Quantity:* ${qty} Credits\n` +
-    `💰 *Payable Amount:* ₹${finalPrice}\n` +
-    `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+    `💰 *Payable Amount:* ₹${finalPrice}\n\n` +
     discountInfo +
     `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* here to verify.`;
 

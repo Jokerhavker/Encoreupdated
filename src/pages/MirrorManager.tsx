@@ -312,7 +312,7 @@ export function MirrorManager() {
   const handleVerifySubPayment = async (planId: string, itemPrice: number) => {
     if (!token || !ownerTelegramId || !planId) return;
     if (!utrInput.trim()) {
-      setPayError('Please fill your 12-digit UPI transaction reference / UTR ID first.');
+      setPayError('Please enter your transaction reference key / UTR / Fampay transaction ID first.');
       return;
     }
     setPaymentProcessing(true);
@@ -2089,36 +2089,24 @@ export function MirrorManager() {
                           </p>
                         </div>
 
-                        <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5 text-gray-700 space-y-2 text-xs text-center">
-                          <p className="font-bold text-indigo-950 uppercase tracking-widest text-[8px]">Direct Payment Application Trigger</p>
-                          <a 
-                            href={upiUrl}
-                            className="inline-block bg-indigo-650 text-white font-extrabold tracking-wide rounded-lg px-4 py-1.5 text-xs hover:bg-indigo-700 transition"
-                          >
-                            Pay ₹{checkoutPlan.price} instantly in UPI App
-                          </a>
-
-                          <p className="text-[10px] text-gray-400 font-medium pt-1">Or manual address transfer:</p>
-                          <div className="bg-white border text-xs rounded px-3 py-1 font-mono text-center font-bold text-gray-800 w-full mx-auto max-w-[180px]">
-                            alkhkumar@fam
-                          </div>
-                        </div>
-
                         <div className="space-y-3.5">
                           <div className="border border-amber-150 bg-amber-50 rounded-xl p-3 text-[10px] text-amber-900 leading-relaxed font-semibold">
                             ⚠️ DOUBLE-SPEND REACTION SYSTEM ACTIVE: Ensure you copy-paste the exact 12-digit transaction ID / UTR hash from your UPI application after successful transfer. Simulated transactions are automatically filtered.
                           </div>
 
                           <div className="space-y-1">
-                            <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref (12-Digit ID)</label>
+                            <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref</label>
+                            <div className="bg-indigo-50/70 border border-indigo-100 text-indigo-950 text-[10px] rounded-lg p-2.5 leading-relaxed">
+                              📝 <b>Note:</b> If you paid through the Fampay app, you can put your <b>Fampay transaction ID</b> also instead of the UTR.
+                            </div>
                             <input 
                               type="text"
-                              placeholder="e.g. 614050212984"
+                              placeholder="e.g. 614050212984 or FMPIB9943751810"
                               value={utrInput}
-                              onChange={(e) => setUtrInput(e.target.value.replace(/\D/g, '').substring(0, 12))}
+                              onChange={(e) => setUtrInput(e.target.value.replace(/[^a-zA-Z0-9]/g, '').substring(0, 24).toUpperCase())}
                               className="w-full border rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             />
-                            <p className="text-[9px] text-gray-400">Must be exactly a 12-digit UPI number sequence.</p>
+                            <p className="text-[9px] text-gray-400">Provide either a 12-digit UPI number sequence or Fampay Transaction ID.</p>
                           </div>
 
                           {payError && (

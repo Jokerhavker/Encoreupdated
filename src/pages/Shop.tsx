@@ -792,7 +792,7 @@ export function Shop() {
                     />
                     <div className="mt-2 text-[10px] font-bold text-slate-500 tracking-tight flex items-center justify-center gap-1">
                       <Smartphone className="w-3.5 h-3.5 text-indigo-500" />
-                      UPI ID: <span className="text-slate-800 font-mono">alkhkumar@fam</span>
+                      <span>Scan QR Code with UPI App</span>
                     </div>
                   </div>
                   

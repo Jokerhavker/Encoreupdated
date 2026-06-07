@@ -53,10 +53,35 @@ export function getMirroredBotInstance(token: string): Telegraf | null {
   return activeMirroredBots.get(token) || null;
 }
 
+export async function getMirroredBotInstanceByUsername(botRefUsername: string): Promise<Telegraf | null> {
+  if (!botRefUsername) return null;
+  const normalizedUsername = botRefUsername.trim().replace("@", "");
+  const botDoc = await MirrorBot.findOne({ 
+    $or: [
+      { botUsername: normalizedUsername },
+      { botUsername: "@" + normalizedUsername }
+    ]
+  });
+  if (!botDoc) return null;
+  return activeMirroredBots.get(botDoc.token) || null;
+}
+
 export function isCurrentlySandboxOrDev(): boolean {
   if (process.env.VERCEL === "1" || process.env.VERCEL_URL) return false;
   if (process.env.NODE_ENV === "production" && !process.env.FORCE_POLLING) return false;
   return true;
+}
+
+export async function checkAndResetExpiredPlan(botDoc: any): Promise<any> {
+  if (!botDoc) return null;
+  if (botDoc.plan && botDoc.plan !== 'free' && botDoc.expiresAt) {
+    if (new Date(botDoc.expiresAt).getTime() < Date.now()) {
+      console.log(`[Expiry Engine] Plan ${botDoc.plan.toUpperCase()} for bot @${botDoc.botUsername || botDoc.token.substring(0,8)} expired on ${botDoc.expiresAt}. Reverting to FREE.`);
+      botDoc.plan = 'free';
+      await botDoc.save();
+    }
+  }
+  return botDoc;
 }
 
 // Check plan constraints on custom channels
@@ -181,6 +206,9 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
     
     // Refresh mirror bot doc dynamically to fetch latest ban list, plans, etc.
     const reloadedBotDoc = await MirrorBot.findOne({ token });
+    if (reloadedBotDoc) {
+      await checkAndResetExpiredPlan(reloadedBotDoc);
+    }
     if (!reloadedBotDoc || !reloadedBotDoc.isActive) {
       console.log(`[Mirror Bot Tracker] Bot is disabled, ignoring message.`);
       return;
@@ -443,7 +471,7 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
     const appUrl = vercelUrl
       ? `https://${vercelUrl}`
       : process.env.VITE_APP_URL || process.env.APP_URL || "https://ais-dev-7zposvri3knpwk5wp3qxma-68179712237.asia-southeast1.run.app";
-    const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
+    const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}&botRef=${doc.botUsername || ""}`;
 
     let mainBotUsername = "EncoreXosintBot";
     try {
@@ -541,8 +569,7 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
 
     const captionText = `🎫 *Subscription Checkout: ${matchedTier.name}*\n\n` +
       couponText +
-      `💰 *Payable Amount:* ₹${amount} / month\n` +
-      `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+      `💰 *Payable Amount:* ₹${amount} / month\n\n` +
       `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* (Fampay/PhonePe/GPay) to instantly verify your purchase:\n\n` +
       `Press cancel to terminate checkout:`;
 
@@ -737,8 +764,7 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
 
     const captionText = `⚡ *Checkout: Credits for ${cmd.command}*\n\n` +
       `📥 *Quantity:* ${qty} Credits\n` +
-      `💰 *Payable Amount:* ₹${finalPrice}\n` +
-      `🔌 *UPI ID:* \`alkhkumar@fam\`\n\n` +
+      `💰 *Payable Amount:* ₹${finalPrice}\n\n` +
       discountInfo +
       `Please scan the QR code above to pay. After paying, send me the *UTR / Transaction ID* here to verify.`;
 
@@ -1627,6 +1653,7 @@ export async function initializeAllMirrorBots() {
     const bots = await MirrorBot.find({ isActive: true });
     console.log(`[Mirror Bot Startup Loader] Restoring ${bots.length} active mirror bots with skipSetupWebhook=true...`);
     for (const b of bots) {
+      await checkAndResetExpiredPlan(b).catch(() => {});
       const isExceeded = await checkAndResetIntegrationPoints(b);
       if (!isExceeded) {
         await startMirrorBot(b, true).catch(() => {});

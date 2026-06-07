@@ -13,7 +13,9 @@ import {
   isCreditOverrideAllowed,
   checkAndResetIntegrationPoints,
   creditMirrorBotCommission,
-  isCurrentlySandboxOrDev
+  isCurrentlySandboxOrDev,
+  getMirroredBotInstanceByUsername,
+  checkAndResetExpiredPlan
 } from './mirrorBotManager.js';
 
 export const apiRouter = express.Router();
@@ -132,6 +134,7 @@ apiRouter.get('/api/mirror-bots', async (req, res) => {
     }
     const bots = await MirrorBot.find({ ownerTelegramId });
     for (const b of bots) {
+      await checkAndResetExpiredPlan(b).catch(() => {});
       await checkAndResetIntegrationPoints(b).catch(() => {});
     }
     res.json(bots);
@@ -148,6 +151,9 @@ apiRouter.get('/api/mirror-bots/detail', async (req, res) => {
 
     const botDoc = await MirrorBot.findOne({ token });
     if (!botDoc) return res.status(404).json({ error: 'Bot configuration not found' });
+
+    // Check & Reset Expired plan
+    await checkAndResetExpiredPlan(botDoc);
 
     // Check & Reset Integration points
     await checkAndResetIntegrationPoints(botDoc);
@@ -1910,7 +1916,14 @@ apiRouter.post('/api/shop/verify-payment', async (req, res) => {
 
     // 5. Send message from Bot to notify user (optional but extremely high-end UI/UX experience)
     try {
-      const botInstance = getBot();
+      let botInstance = getBot();
+      if (botRef) {
+        const mirroredBot = await getMirroredBotInstanceByUsername(botRef);
+        if (mirroredBot) {
+          botInstance = mirroredBot;
+          console.log(`[Shop Verify Payment] Using mirrored bot instance for sending success notification to user ${telegramId} of bot @${botRef}`);
+        }
+      }
       if (botInstance) {
         const displayProductName = finalProductName || (productId === 'premium' ? '👑 Premium Subscription (Monthly)' : `💎 ${pCount} Common Credits for ${productId}`);
         
