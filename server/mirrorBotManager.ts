@@ -88,9 +88,9 @@ export async function checkAndResetExpiredPlan(botDoc: any): Promise<any> {
 export function getMaxForceChannels(plan: string): number {
   switch (plan) {
     case 'free': return 1;
-    case 'silver': return 3;
-    case 'gold': return 9999; // Unlimited
-    case 'max': return 9999; // Unlimited
+    case 'silver': return 2;
+    case 'gold': return 5;
+    case 'max': return 10;
     default: return 1;
   }
 }
@@ -1506,9 +1506,19 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
 
       // Private chat restriction on API commands for non-premiums
       if (!isGroup && cmdDef.isApi) {
-        const isAllowed = userDoc && (userDoc.isAdmin || userDoc.isPremium || String(ctx.from?.id) === doc.ownerTelegramId);
+        const isAllowed = (userDoc && (userDoc.isAdmin || userDoc.isPremium)) || (String(ctx.from?.id) === doc.ownerTelegramId && doc.plan !== 'free');
         if (!isAllowed) {
-          await ctx.reply(`⚠️ *Premium Required*\n\nSorry, running API commands in private chat is reserved for *Premium subscribers* of the main bot!\n\nUpgrade via /shop or run the command in groups.`, replyOptions);
+          if (String(ctx.from?.id) === doc.ownerTelegramId && doc.plan === 'free') {
+            await ctx.reply(
+              `⚠️ *Premium Required (Free Plan Owner)*\n\n` +
+              `Sorry, running API commands in private chat is reserved for *Premium subscribers*!\n\n` +
+              `👑 *Owner Tip:* Upgrade your cloned bot to at least *Silver Plan* to run all API commands in your private chat without limits!\n\n` +
+              `Run the command in groups, purchase /shop premium, or upgrade your bot via the Mirror WebApp Manager.`,
+              replyOptions
+            );
+          } else {
+            await ctx.reply(`⚠️ *Premium Required*\n\nSorry, running API commands in private chat is reserved for *Premium subscribers* of the main bot!\n\nUpgrade via /shop or run the command in groups.`, replyOptions);
+          }
           return;
         }
       }

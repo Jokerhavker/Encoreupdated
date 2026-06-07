@@ -1167,10 +1167,10 @@ export function MirrorManager() {
                   <div className="p-3.5 bg-gray-50 rounded-lg space-y-1">
                     <p className="text-[10px] text-gray-450 uppercase font-black tracking-wider">Forced Subscribe Limits</p>
                     <p className="font-extrabold text-indigo-900 flex flex-col gap-0.5 justify-center">
-                      {activePlan === 'free' && <span>None (Only Main Group Locked @encorexosint)</span>}
-                      {activePlan === 'silver' && <span>Up to 1 Custom Forced Channel (+ Main Channel)</span>}
-                      {activePlan === 'gold' && <span>Up to 2 Custom Forced Channels (+ Main Channel)</span>}
-                      {activePlan === 'max' && <span>Up to 5 Custom Forced Channels (Main Channel Bypass Active 🔓)</span>}
+                      {activePlan === 'free' && <span>Up to 1 Custom Forced Channel (+ Main Channel)</span>}
+                      {activePlan === 'silver' && <span>Up to 2 Custom Forced Channels (+ Main Channel)</span>}
+                      {activePlan === 'gold' && <span>Up to 5 Custom Forced Channels (+ Main Channel)</span>}
+                      {activePlan === 'max' && <span>Up to 10 Custom Forced Channels (Bypass Main Channel Active 🔓)</span>}
                     </p>
                   </div>
 
@@ -1346,51 +1346,81 @@ export function MirrorManager() {
                 {/* Add channel section */}
                 <div className="border-t pt-4 space-y-4">
                   <h4 className="text-xs font-bold text-gray-900">Add custom forced channel:</h4>
-                  {activePlan === 'free' ? (
-                    <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg text-[11px] text-indigo-900 flex items-start gap-2 select-none">
-                      <AlertTriangle className="w-4 h-4 shrink-0 text-indigo-600 mt-0.5" />
-                      <div>
-                        <strong>Free tier limits:</strong> Custom force subscription channels require SILVER plans or higher.
-                        <button onClick={() => setActiveTab('shop')} className="text-indigo-600 font-extrabold hover:underline ml-1 block mt-1">
-                          👑 Upgrade your plan here to add forced channels!
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <form onSubmit={handleAddForceChannel} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Channel Username Handle</label>
-                        <input 
-                          type="text" 
-                          value={forceChanName}
-                          onChange={(e) => setForceChanName(e.target.value)}
-                          placeholder="e.g. @MyCoolChannel"
-                          className="w-full border border-gray-300 rounded px-2.5 py-2 text-xs focus:ring-1 focus:ring-indigo-500"
-                        />
-                      </div>
+                  {(() => {
+                    const getClientMaxForceChannels = (plan: string): number => {
+                      switch (plan) {
+                        case 'free': return 1;
+                        case 'silver': return 2;
+                        case 'gold': return 5;
+                        case 'max': return 10;
+                        default: return 1;
+                      }
+                    };
+                    const currentForceChannelsCount = (botDetail?.forceChannels || []).length;
+                    const maxForceChannelsAllowed = getClientMaxForceChannels(activePlan);
+                    const isLimitReached = currentForceChannelsCount >= maxForceChannelsAllowed;
 
-                      <div>
-                        <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Invitation Join Link</label>
-                        <input 
-                          type="text" 
-                          value={forceChanLink}
-                          onChange={(e) => setForceChanLink(e.target.value)}
-                          placeholder="e.g. https://t.me/MyCoolChannel"
-                          className="w-full border border-gray-300 rounded px-2.5 py-2 text-xs focus:ring-1 focus:ring-indigo-500"
-                        />
-                      </div>
+                    if (isLimitReached) {
+                      return (
+                        <div className="p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-lg text-[11px] text-indigo-950">
+                          <div className="flex gap-2">
+                            <AlertTriangle className="w-4 h-4 shrink-0 text-indigo-600 mt-0.5" />
+                            <div>
+                              <strong className="font-extrabold text-indigo-950 uppercase text-[10px]">Forced Channels Limit Reached</strong>
+                              <p className="mt-0.5 text-gray-500 font-medium">
+                                You have configured the maximum of <span className="font-extrabold text-indigo-900">{maxForceChannelsAllowed}</span> custom forced subscription channel(s) permitted under your <span className="font-extrabold uppercase text-indigo-900">{activePlan}</span> plan.
+                              </p>
+                              {activePlan !== 'max' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveTab('shop')}
+                                  className="text-indigo-600 font-extrabold hover:underline mt-1.5 flex items-center gap-1 cursor-pointer"
+                                >
+                                  👑 Upgrade your plan to unlock more custom force channels! →
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
 
-                      <div className="md:col-span-2 pt-1">
-                        <button
-                          type="submit"
-                          disabled={loading}
-                          className="bg-indigo-600 text-white px-4 py-2 rounded text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
-                        >
-                          Activate custom Force Channel
-                        </button>
-                      </div>
-                    </form>
-                  )}
+                    return (
+                      <form onSubmit={handleAddForceChannel} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Channel Username Handle</label>
+                          <input 
+                            type="text" 
+                            value={forceChanName}
+                            onChange={(e) => setForceChanName(e.target.value)}
+                            placeholder="e.g. @MyCoolChannel"
+                            className="w-full border border-gray-300 rounded px-2.5 py-2 text-xs focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-semibold text-gray-500 mb-1">Invitation Join Link</label>
+                          <input 
+                            type="text" 
+                            value={forceChanLink}
+                            onChange={(e) => setForceChanLink(e.target.value)}
+                            placeholder="e.g. https://t.me/MyCoolChannel"
+                            className="w-full border border-gray-300 rounded px-2.5 py-2 text-xs focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2 pt-1">
+                          <button
+                            type="submit"
+                            disabled={loading}
+                            className="bg-indigo-600 text-white px-4 py-2 rounded text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
+                          >
+                            Activate custom Force Channel
+                          </button>
+                        </div>
+                      </form>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
