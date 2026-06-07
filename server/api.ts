@@ -1341,6 +1341,50 @@ apiRouter.post('/api/broadcast', async (req, res) => {
   }
 });
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function sendTelegramMessageSafe(
+  botInstance: any,
+  chatId: string,
+  message: string,
+  reply_markup: any,
+  retries = 3
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await botInstance.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown', reply_markup });
+      return true;
+    } catch (err: any) {
+      const isRateLimit =
+        err.code === 429 ||
+        err.response?.error_code === 429 ||
+        (err.description && err.description.includes('Too Many Requests'));
+
+      if (isRateLimit) {
+        const retryAfter = err.parameters?.retry_after || 5;
+        console.warn(`[Broadcast Rate Limit] Hit 429. Waiting for ${retryAfter} seconds before retry. Chat ID: ${chatId}`);
+        await sleep(retryAfter * 1000 + 500);
+        continue; // retry
+      }
+
+      const desc = err.description || err.message || "";
+      if (
+        desc.includes('blocked') ||
+        desc.includes('not found') ||
+        desc.includes('deactivated') ||
+        desc.includes('chat not found') ||
+        desc.includes('kicked') ||
+        desc.includes('not a member')
+      ) {
+        return false;
+      }
+
+      await sleep(100);
+    }
+  }
+  return false;
+}
+
 // Real-time broadcast runner function designed to map bot instances dynamically
 async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, target: string, message: string, button: any) {
   try {
@@ -1439,7 +1483,10 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
       reply_markup = { inline_keyboard: [[inlineBtn]] };
     }
 
-    // Real-time update function to notify progress
+    // Rate-limited chunk and thread-safe DB committer
+    let isSaving = false;
+    let pendingSave = false;
+
     const commitProgress = async () => {
       historyEntry.successUsers = successUsers;
       historyEntry.failedUsers = failedUsers;
@@ -1448,64 +1495,112 @@ async function runBackgroundBroadcast(historyId: string, isGlobal: boolean, targ
       await historyEntry.save();
     };
 
-    // User Dispatcher
-    for (let i = 0; i < filteredUsers.length; i++) {
-      const userObj = filteredUsers[i];
-      const userTelegramId = String(userObj.telegramId);
+    const throttledCommitProgress = async () => {
+      if (isSaving) {
+        pendingSave = true;
+        return;
+      }
+      isSaving = true;
+      try {
+        await commitProgress();
+      } catch (err) {
+        console.error("[Broadcast Progress Save Error]", err);
+      } finally {
+        isSaving = false;
+        if (pendingSave) {
+          pendingSave = false;
+          setTimeout(throttledCommitProgress, 500);
+        }
+      }
+    };
 
-      // Determine correct bot instance
-      let activeSender = bot;
-      if (userObj.interactedBots && userObj.interactedBots.length > 0) {
-        for (const botName of userObj.interactedBots) {
+    // Group tasks by bot activeSender
+    interface BroadcastTask {
+      chatId: string;
+      type: 'user' | 'group';
+    }
+
+    const botTasksMap = new Map<any, BroadcastTask[]>();
+    botTasksMap.set(bot, []);
+
+    const getBotForChat = (interactedBots: string[] | undefined) => {
+      if (interactedBots && interactedBots.length > 0) {
+        for (const botName of interactedBots) {
           const mapped = mirrorBotsMap.get(botName.toLowerCase());
           if (mapped) {
-            activeSender = mapped.instance;
-            break;
+            return mapped.instance;
           }
         }
       }
+      return bot;
+    };
 
-      try {
-        await activeSender.telegram.sendMessage(userTelegramId, message, { parse_mode: 'Markdown', reply_markup });
-        successUsers++;
-      } catch (err) {
-        failedUsers++;
+    // Allocate user tasks
+    for (const u of filteredUsers) {
+      const activeSender = getBotForChat(u.interactedBots);
+      if (!botTasksMap.has(activeSender)) {
+        botTasksMap.set(activeSender, []);
       }
-
-      if (i % 5 === 0 || i === filteredUsers.length - 1) {
-        await commitProgress();
-      }
+      botTasksMap.get(activeSender)!.push({
+        chatId: String(u.telegramId),
+        type: 'user'
+      });
     }
 
-    // Group Dispatcher
-    for (let i = 0; i < filteredGroups.length; i++) {
-      const groupObj = filteredGroups[i];
-      const groupTelegramId = String(groupObj.telegramId);
+    // Allocate group tasks
+    for (const g of filteredGroups) {
+      const activeSender = getBotForChat(g.interactedBots);
+      if (!botTasksMap.has(activeSender)) {
+        botTasksMap.set(activeSender, []);
+      }
+      botTasksMap.get(activeSender)!.push({
+        chatId: String(g.telegramId),
+        type: 'group'
+      });
+    }
 
-      // Determine correct bot instance
-      let activeSender = bot;
-      if (groupObj.interactedBots && groupObj.interactedBots.length > 0) {
-        for (const botName of groupObj.interactedBots) {
-          const mapped = mirrorBotsMap.get(botName.toLowerCase());
-          if (mapped) {
-            activeSender = mapped.instance;
-            break;
-          }
+    // Define a rate-limited channel worker for a specific bot's queue
+    const runWorkerForBot = async (botInstance: any, tasks: BroadcastTask[]) => {
+      const CHUNK_SIZE = 25; // Send 25 messages per chunk
+      for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
+        const chunk = tasks.slice(i, i + CHUNK_SIZE);
+        const chunkStartTime = Date.now();
+
+        await Promise.all(
+          chunk.map(async (task) => {
+            const success = await sendTelegramMessageSafe(botInstance, task.chatId, message, reply_markup);
+            if (task.type === 'user') {
+              if (success) successUsers++;
+              else failedUsers++;
+            } else {
+              if (success) successGroups++;
+              else failedGroups++;
+            }
+          })
+        );
+
+        throttledCommitProgress();
+
+        // Enforce maximum speed of 25 msgs/sec by sleeping the remainder of 1 second
+        const elapsed = Date.now() - chunkStartTime;
+        const sleepTime = 1000 - elapsed;
+        if (sleepTime > 0) {
+          await sleep(sleepTime);
         }
       }
+    };
 
-      try {
-        await activeSender.telegram.sendMessage(groupTelegramId, message, { parse_mode: 'Markdown', reply_markup });
-        successGroups++;
-      } catch (err) {
-        failedGroups++;
-      }
-
-      if (i % 5 === 0 || i === filteredGroups.length - 1) {
-        await commitProgress();
+    // Execute workers concurrently for all active bots to utilize multi-token system fully!
+    const workers: Promise<void>[] = [];
+    for (const [botInstance, tasks] of botTasksMap.entries()) {
+      if (tasks.length > 0) {
+        workers.push(runWorkerForBot(botInstance, tasks));
       }
     }
 
+    await Promise.all(workers);
+
+    // Final database update
     const timeTakenMs = Date.now() - startTime;
     historyEntry.status = 'completed';
     historyEntry.timeTakenMs = timeTakenMs;
