@@ -1352,7 +1352,7 @@ async function updateDonationMessage(providedAppUrl?: string) {
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "Donate Now 💸", web_app: { url: `${appUrl}/donate` } }]
+      [{ text: "Donate Now 💸", url: `${appUrl}/donate` }]
     ]
   };
 
@@ -1475,7 +1475,7 @@ apiRouter.post('/api/donations/send-message', async (req, res) => {
 
     const keyboard = {
       inline_keyboard: [
-        [{ text: "Donate Now 💸", web_app: { url: `${appUrl}/donate` } }]
+        [{ text: "Donate Now 💸", url: `${appUrl}/donate` }]
       ]
     };
 
