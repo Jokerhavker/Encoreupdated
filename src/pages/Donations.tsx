@@ -92,6 +92,25 @@ export function Donations() {
     }
   };
 
+  const handleDelete = async (donationId: string) => {
+    if (!window.confirm('Are you sure you want to delete this donation record? This will also remove it from the Telegram channel leaderboard immediately if it was approved.')) {
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await axios.delete(`/api/donations/${donationId}`);
+      if (res.data?.success) {
+        setSuccessMsg(res.data.message || 'Donation deleted successfully!');
+        // Refresh
+        const upRes = await axios.get('/api/donations');
+        setDonations(upRes.data || []);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.error || 'Failed to delete donation record.');
+    }
+  };
+
   // Compute Stats
   const upiTotalInr = donations
     .filter(d => d.method === 'upi' && d.status === 'Approved')
@@ -340,23 +359,30 @@ export function Donations() {
                         )}
                       </td>
 
-                      <td className="px-4 py-3 text-right space-x-1 whitespace-nowrap">
+                      <td className="px-4 py-3 text-right space-x-1.5 whitespace-nowrap">
                         {d.status === 'Pending' && (
                           <>
                             <button
                               onClick={() => handleModerate(d._id, 'Approve')}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded text-[10px] font-bold transition select-none cursor-pointer"
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded text-[10px] font-bold transition select-none cursor-pointer inline-flex items-center"
                             >
                               Approve
                             </button>
                             <button
                               onClick={() => handleModerate(d._id, 'Reject')}
-                              className="bg-red-50 text-red-650 hover:bg-red-100 px-2 py-1 rounded text-[10px] font-bold transition select-none cursor-pointer"
+                              className="bg-red-50 text-red-650 hover:bg-red-100 px-2 py-1 rounded text-[10px] font-bold transition select-none cursor-pointer inline-flex items-center"
                             >
                               Reject
                             </button>
                           </>
                         )}
+                        <button
+                          onClick={() => handleDelete(d._id)}
+                          title="Delete Donation"
+                          className="text-red-500 hover:text-red-700 p-1 hover:bg-red-50 rounded transition inline-flex items-center justify-center cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </td>
                     </tr>
                   ))}

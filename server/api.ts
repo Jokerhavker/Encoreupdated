@@ -1304,12 +1304,6 @@ async function updateDonationMessage(providedAppUrl?: string) {
   }
 
   const messageIdSetting = await Setting.findOne({ key: 'donationChannelMessageId' });
-  if (!messageIdSetting || !messageIdSetting.value) {
-    console.log("No sent donation message ID found in settings. Skipping channel edit.");
-    return;
-  }
-
-  const messageId = Number(messageIdSetting.value);
   const donations = await Donation.find({ status: 'Approved' });
 
   // Sort by INR equivalent value descending
@@ -1356,6 +1350,29 @@ async function updateDonationMessage(providedAppUrl?: string) {
     ]
   };
 
+  // Auto-heal: If there is no active donation leader board message ID, send a new one
+  if (!messageIdSetting || !messageIdSetting.value) {
+    try {
+      console.log("No sent donation message ID found. Creating a new message...");
+      const sent = await bot.telegram.sendMessage('@encorexosint', text, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+      await Setting.findOneAndUpdate(
+        { key: 'donationChannelMessageId' },
+        { value: sent.message_id },
+        { upsert: true }
+      );
+      console.log("Automatically sent new donation channel message and updated ID.");
+      return;
+    } catch (sendErr: any) {
+      console.error("Failed to automatically send donation channel message:", sendErr.message);
+      return;
+    }
+  }
+
+  const messageId = Number(messageIdSetting.value);
+
   try {
     await bot.telegram.editMessageText('@encorexosint', messageId, undefined, text, {
       parse_mode: 'Markdown',
@@ -1364,6 +1381,25 @@ async function updateDonationMessage(providedAppUrl?: string) {
     console.log("Donation channel message edited successfully!");
   } catch (err: any) {
     console.error("Failed to edit donation channel message:", err.message);
+    if (err.message && err.message.includes("message is not modified")) {
+      return;
+    }
+    // Auto-heal: If edit failed because message is deleted or not found, broadcast a fresh message
+    try {
+      console.log("Failed to edit message. Creating a new message instead of editing...");
+      const sent = await bot.telegram.sendMessage('@encorexosint', text, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+      await Setting.findOneAndUpdate(
+        { key: 'donationChannelMessageId' },
+        { value: sent.message_id },
+        { upsert: true }
+      );
+      console.log("Successfully auto-healed and sent a new donation message to replace deleted one.");
+    } catch (fallbackErr: any) {
+      console.error("Failed to send fallback message:", fallbackErr.message);
+    }
   }
 }
 
@@ -1409,6 +1445,33 @@ apiRouter.get('/api/donations', async (req, res) => {
   try {
     const donations = await Donation.find().sort({ createdAt: -1 });
     res.json(donations);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/api/donations/:id', async (req, res) => {
+  try {
+    const donation = await Donation.findById(req.params.id);
+    if (!donation) {
+      return res.status(404).json({ error: 'Donation record not found' });
+    }
+
+    // Free up transaction UTR/TXID from UsedTransaction so it can be reused/re-verified if correct
+    if (donation.utr) {
+      await UsedTransaction.deleteOne({ transactionId: donation.utr });
+    }
+
+    await Donation.findByIdAndDelete(req.params.id);
+
+    const reqProtocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const reqHost = req.headers.host;
+    const currentOrigin = `${reqProtocol}://${reqHost}`;
+
+    // Update the telegram message seamlessly
+    await updateDonationMessage(currentOrigin);
+
+    res.json({ success: true, message: 'Donation record deleted and channel leaderboard updated successfully!' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
