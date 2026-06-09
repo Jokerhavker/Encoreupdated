@@ -322,7 +322,7 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
       // 2. Custom channels
       if (doc.forceChannels && doc.forceChannels.length > 0) {
         for (const channel of doc.forceChannels) {
-          const channelId = typeof channel === "string" ? channel : channel.id;
+          const channelId = typeof channel === "string" ? channel : (channel.username || channel.id);
           try {
             const member = await ctx.telegram.getChatMember(channelId, ctx.from.id);
             if (member.status === "left" || member.status === "kicked") {
@@ -1537,7 +1537,7 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
       // 2. Custom channels
       if (doc.forceChannels && doc.forceChannels.length > 0) {
         for (const channel of doc.forceChannels) {
-          const channelId = typeof channel === "string" ? channel : channel.id;
+          const channelId = typeof channel === "string" ? channel : (channel.username || channel.id);
           const channelLink = typeof channel === "object" ? channel.link : `https://t.me/${channelId.replace('@','')}`;
           try {
             const member = await ctx.telegram.getChatMember(channelId, ctx.from!.id);

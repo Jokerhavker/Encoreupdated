@@ -191,6 +191,15 @@ const MirrorWithdrawalRequestSchema = new mongoose.Schema({
   historyId: { type: mongoose.Schema.Types.ObjectId }
 }, { timestamps: true });
 
+const DonationSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  amount: { type: Number, required: true }, // value in the native unit (INR for upi, USD for crypto)
+  method: { type: String, enum: ['upi', 'crypto'], required: true },
+  utr: { type: String }, // Transaction ID / UTR / Hash
+  cryptoCurrency: { type: String }, // e.g. USDT (TRC-20)
+  status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
+}, { timestamps: true });
+
 export const Command = (mongoose.models.Command || mongoose.model('Command', CommandSchema, 'encore_commands')) as mongoose.Model<any>;
 export const BotUser = (mongoose.models.BotUser || mongoose.model('BotUser', UserSchema, 'encore_users')) as mongoose.Model<any>;
 export const BotGroup = (mongoose.models.BotGroup || mongoose.model('BotGroup', GroupSchema, 'encore_groups')) as mongoose.Model<any>;
@@ -203,6 +212,7 @@ export const Coupon = (mongoose.models.Coupon || mongoose.model('Coupon', Coupon
 export const MirrorBot = (mongoose.models.MirrorBot || mongoose.model('MirrorBot', MirrorBotSchema, 'encore_mirror_bots')) as mongoose.Model<any>;
 export const MirrorWallet = (mongoose.models.MirrorWallet || mongoose.model('MirrorWallet', MirrorWalletSchema, 'encore_mirror_wallets')) as mongoose.Model<any>;
 export const MirrorWithdrawalRequest = (mongoose.models.MirrorWithdrawalRequest || mongoose.model('MirrorWithdrawalRequest', MirrorWithdrawalRequestSchema, 'encore_mirror_withdrawal_requests')) as mongoose.Model<any>;
+export const Donation = (mongoose.models.Donation || mongoose.model('Donation', DonationSchema, 'encore_donations')) as mongoose.Model<any>;
 
 let cachedAppUrl: string | null = null;
 export function getCachedAppUrl(): string | null {

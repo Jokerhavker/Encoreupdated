@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, TerminalSquare, Users, MessageSquareShare, Settings, Layers, LogOut, Gift, ShoppingCart, Receipt, Bot } from 'lucide-react';
+import { LayoutDashboard, TerminalSquare, Users, MessageSquareShare, Settings, Layers, LogOut, Gift, ShoppingCart, Receipt, Bot, Heart } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -18,6 +18,7 @@ const navItems = [
   { href: '/redeem-store', label: 'Redeem Store', icon: Gift },
   { href: '/store-management', label: 'Store Management', icon: ShoppingCart },
   { href: '/transactions', label: 'Transactions', icon: Receipt },
+  { href: '/donations', label: 'Donations', icon: Heart },
 ];
 
 export function Layout() {

@@ -16,6 +16,8 @@ import { RedeemStoreManagement } from './pages/RedeemStoreManagement';
 import { Transactions } from './pages/Transactions';
 import { MirrorManager } from './pages/MirrorManager';
 import { MirrorAdmin } from './pages/MirrorAdmin';
+import Donate from './pages/Donate';
+import { Donations } from './pages/Donations';
 
 export default function App() {
   return (
@@ -26,6 +28,7 @@ export default function App() {
         <Route path="/redeem" element={<Redeem />} />
         <Route path="/shop" element={<Shop />} />
         <Route path="/mirrors" element={<MirrorManager />} />
+        <Route path="/donate" element={<Donate />} />
         <Route element={<AdminGuard />}>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
@@ -38,6 +41,7 @@ export default function App() {
             <Route path="redeem-store" element={<RedeemStoreManagement />} />
             <Route path="store-management" element={<StoreManagement />} />
             <Route path="transactions" element={<Transactions />} />
+            <Route path="donations" element={<Donations />} />
           </Route>
         </Route>
       </Routes>

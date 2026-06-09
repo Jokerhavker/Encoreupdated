@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import axios from 'axios';
 import { Telegraf } from 'telegraf';
-import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest, setCachedAppUrl } from './db.js';
+import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest, Donation, setCachedAppUrl, getCachedAppUrl } from './db.js';
 import { getBot, setupWebhook } from './bot.js';
 import { 
   startMirrorBot, 
@@ -1293,6 +1293,349 @@ apiRouter.post('/api/settings', async (req, res) => {
     }
   }
   res.json({ success: true });
+});
+
+// Helper to update Telegram Donation leaderboard message
+async function updateDonationMessage() {
+  const bot = getBot();
+  if (!bot) {
+    console.warn("Main Telegram bot is not initialized. Cannot update donation message.");
+    return;
+  }
+
+  const messageIdSetting = await Setting.findOne({ key: 'donationChannelMessageId' });
+  if (!messageIdSetting || !messageIdSetting.value) {
+    console.log("No sent donation message ID found in settings. Skipping channel edit.");
+    return;
+  }
+
+  const messageId = Number(messageIdSetting.value);
+  const donations = await Donation.find({ status: 'Approved' });
+
+  // Sort by INR equivalent value descending
+  const sorted = donations.sort((a, b) => {
+    const valA = a.method === 'crypto' ? a.amount * 83 : a.amount;
+    const valB = b.method === 'crypto' ? b.amount * 83 : b.amount;
+    return valB - valA;
+  });
+
+  let text = "🏆 *Top Donations!*\n";
+  text += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  if (sorted.length === 0) {
+    text += "No donations yet! Be the first to support our channel context ❤️\n\n";
+  } else {
+    sorted.slice(0, 10).forEach((d, i) => {
+      let medal = "";
+      if (i === 0) medal = " 🥇";
+      else if (i === 1) medal = " 🥈";
+      else if (i === 2) medal = " 🥉";
+      else medal = " 🎖️";
+
+      if (d.method === 'crypto') {
+        text += `${i + 1}. *${d.name}* - $${d.amount} (${d.cryptoCurrency})${medal}\n`;
+      } else {
+        text += `${i + 1}. *${d.name}* - ₹${d.amount}${medal}\n`;
+      }
+    });
+    text += "\n";
+  }
+
+  text += "━━━━━━━━━━━━━━━━━━━━\n";
+  text += "Donate using the given webapp below👇!";
+
+  const appUrlSetting = await Setting.findOne({ key: 'appUrl' });
+  const appUrl = appUrlSetting?.value || getCachedAppUrl() || '';
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "Donate Now 💸", web_app: { url: `${appUrl}/donate` } }]
+    ]
+  };
+
+  try {
+    await bot.telegram.editMessageText('@encorexosint', messageId, undefined, text, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+    console.log("Donation channel message edited successfully!");
+  } catch (err: any) {
+    console.error("Failed to edit donation channel message:", err.message);
+  }
+}
+
+// Donation Endpoints
+apiRouter.get('/api/donations/config', async (req, res) => {
+  try {
+    const configSetting = await Setting.findOne({ key: 'donationSystemConfig' });
+    const defaultConfig = {
+      payeeUpi: 'alkhkumar@fam',
+      cryptoCurrencyName: 'USDT (TRC-20)',
+      cryptoWalletAddress: '',
+      showCrypto: false
+    };
+    res.json(configSetting?.value || defaultConfig);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/donations/config', async (req, res) => {
+  try {
+    const { payeeUpi, cryptoCurrencyName, cryptoWalletAddress, showCrypto } = req.body;
+    const config = {
+      payeeUpi: payeeUpi || 'alkhkumar@fam',
+      cryptoCurrencyName: cryptoCurrencyName || 'USDT (TRC-20)',
+      cryptoWalletAddress: cryptoWalletAddress || '',
+      showCrypto: !!showCrypto
+    };
+
+    await Setting.findOneAndUpdate(
+      { key: 'donationSystemConfig' },
+      { value: config },
+      { upsert: true }
+    );
+
+    res.json({ success: true, config });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/api/donations', async (req, res) => {
+  try {
+    const donations = await Donation.find().sort({ createdAt: -1 });
+    res.json(donations);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/donations/send-message', async (req, res) => {
+  try {
+    const bot = getBot();
+    if (!bot) {
+      return res.status(400).json({ error: 'Main bot is not initialized. Make sure TELEGRAM_BOT_TOKEN is configured.' });
+    }
+
+    const donations = await Donation.find({ status: 'Approved' });
+    const sorted = donations.sort((a, b) => {
+      const valA = a.method === 'crypto' ? a.amount * 83 : a.amount;
+      const valB = b.method === 'crypto' ? b.amount * 83 : b.amount;
+      return valB - valA;
+    });
+
+    let text = "🏆 *Top Donations!*\n";
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+    if (sorted.length === 0) {
+      text += "No donations yet! Be the first to support our channel context ❤️\n\n";
+    } else {
+      sorted.slice(0, 10).forEach((d, i) => {
+        let medal = "";
+        if (i === 0) medal = " 🥇";
+        else if (i === 1) medal = " 🥈";
+        else if (i === 2) medal = " 🥉";
+        else medal = " 🎖️";
+
+        if (d.method === 'crypto') {
+          text += `${i + 1}. *${d.name}* - $${d.amount} (${d.cryptoCurrency})${medal}\n`;
+        } else {
+          text += `${i + 1}. *${d.name}* - ₹${d.amount}${medal}\n`;
+        }
+      });
+      text += "\n";
+    }
+
+    text += "━━━━━━━━━━━━━━━━━━━━\n";
+    text += "Donate using the given webapp below👇!";
+
+    const appUrlSetting = await Setting.findOne({ key: 'appUrl' });
+    const appUrl = appUrlSetting?.value || getCachedAppUrl() || '';
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "Donate Now 💸", web_app: { url: `${appUrl}/donate` } }]
+      ]
+    };
+
+    const sent = await bot.telegram.sendMessage('@encorexosint', text, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+
+    await Setting.findOneAndUpdate(
+      { key: 'donationChannelMessageId' },
+      { value: sent.message_id },
+      { upsert: true }
+    );
+
+    res.json({ success: true, message: 'Donation message sent successfully inside @encorexosint channel!' });
+  } catch (err: any) {
+    console.error("Failed to send donation message:", err.message);
+    res.status(500).json({ error: 'Failed to post to Telegram format channel. Make sure bot is an admin in @encorexosint: ' + err.message });
+  }
+});
+
+apiRouter.post('/api/donations/verify-upi', async (req, res) => {
+  try {
+    const { name, amount, utr } = req.body;
+    if (!utr) return res.status(400).json({ error: 'Transaction/UTR ID is required' });
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'Please specify a valid numeric amount' });
+    }
+
+    const cleanUtr = String(utr).trim();
+    
+    // Check double spend in UsedTransaction
+    const spentTxn = await UsedTransaction.findOne({ transactionId: cleanUtr });
+    if (spentTxn) {
+      return res.status(400).json({ error: 'This transaction/UTR ID has already been used.' });
+    }
+
+    // Check double spend in Donation
+    const spentDonation = await Donation.findOne({ utr: cleanUtr });
+    if (spentDonation) {
+      return res.status(400).json({ error: 'This donation transaction/UTR ID has already been added.' });
+    }
+
+    // Call Fampay APIs
+    let foundTxn: any = null;
+    try {
+      // Query 1: Try as UTR
+      const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanUtr}`);
+      if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
+        foundTxn = utrRes.data.results.find((item: any) => {
+          const isSuccess = String(item.Payment).toLowerCase() === 'success';
+          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+          return isSuccess && isAmountMatch;
+        });
+      }
+
+      // Query 2: Try as ID if not found
+      if (!foundTxn) {
+        const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanUtr}`);
+        if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
+          foundTxn = idRes.data.results.find((item: any) => {
+            const isSuccess = String(item.Payment).toLowerCase() === 'success';
+            const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
+            return isSuccess && isAmountMatch;
+          });
+        }
+      }
+    } catch (apiErr: any) {
+      console.error("[Donation Fampay verif error]", apiErr.message);
+      return res.status(502).json({ error: 'Verification service temporarily offline. Please try manually or wait and try again.' });
+    }
+
+    if (!foundTxn) {
+      return res.status(400).json({ 
+        error: `Transaction not found on Fampay or amount does not match ₹${amount}. Ensure payment is successful and exact amount was sent.` 
+      });
+    }
+
+    const realAmount = Number(amount);
+
+    // Register transaction ID as spent
+    await UsedTransaction.create({
+      transactionId: cleanUtr,
+      telegramId: 'donation_webapp',
+      amount: realAmount,
+      type: 'donation'
+    });
+
+    const newDonation = await Donation.create({
+      name: name?.trim() || 'Anonymous',
+      amount: realAmount,
+      method: 'upi',
+      utr: cleanUtr,
+      status: 'Approved'
+    });
+
+    // Rebuild/Update main channel message
+    await updateDonationMessage();
+
+    res.json({ success: true, donation: newDonation });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/donations/submit-crypto', async (req, res) => {
+  try {
+    const { name, amount, utr, cryptoCurrency } = req.body;
+    if (!utr) return res.status(400).json({ error: 'Transaction Hash/UTR is required' });
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'Please enter a valid donation amount' });
+    }
+    if (!cryptoCurrency) return res.status(400).json({ error: 'Crypto Currency name is required' });
+
+    const cleanUtr = String(utr).trim();
+
+    // Check double spend in UsedTransaction
+    const spentTxn = await UsedTransaction.findOne({ transactionId: cleanUtr });
+    if (spentTxn) {
+      return res.status(400).json({ error: 'This transaction/hash has already been used.' });
+    }
+
+    // Check double spend in Donation
+    const spentDonation = await Donation.findOne({ utr: cleanUtr });
+    if (spentDonation) {
+      return res.status(400).json({ error: 'This donation transaction/hash has already been submitted.' });
+    }
+
+    const newDonation = await Donation.create({
+      name: name?.trim() || 'Anonymous',
+      amount: Number(amount),
+      method: 'crypto',
+      utr: cleanUtr,
+      cryptoCurrency,
+      status: 'Pending'
+    });
+
+    res.json({ success: true, message: 'Your crypto donation has been submitted and is pending verification. Thank you!', donation: newDonation });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/donations/moderate', async (req, res) => {
+  try {
+    const { donationId, action } = req.body; // action: 'Approve' or 'Reject'
+    if (!donationId || !action) {
+      return res.status(400).json({ error: 'donationId and action are required' });
+    }
+
+    const donation = await Donation.findById(donationId);
+    if (!donation) return res.status(404).json({ error: 'Donation record not found' });
+
+    if (donation.status !== 'Pending') {
+      return res.status(400).json({ error: `This donation has already been ${donation.status.toLowerCase()}.` });
+    }
+
+    if (action === 'Approve') {
+      donation.status = 'Approved';
+      await donation.save();
+
+      // Register transaction ID as spent
+      await UsedTransaction.create({
+        transactionId: donation.utr,
+        telegramId: 'donation_webapp',
+        amount: donation.amount,
+        type: 'donation'
+      });
+
+      // Update message
+      await updateDonationMessage();
+      return res.json({ success: true, message: 'Donation approved successfully and channel message updated!' });
+    } else {
+      donation.status = 'Rejected';
+      await donation.save();
+      return res.json({ success: true, message: 'Donation rejected.' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 apiRouter.get('/api/broadcast', async (req, res) => {
