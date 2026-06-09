@@ -1296,7 +1296,7 @@ apiRouter.post('/api/settings', async (req, res) => {
 });
 
 // Helper to update Telegram Donation leaderboard message
-async function updateDonationMessage() {
+async function updateDonationMessage(providedAppUrl?: string) {
   const bot = getBot();
   if (!bot) {
     console.warn("Main Telegram bot is not initialized. Cannot update donation message.");
@@ -1345,7 +1345,10 @@ async function updateDonationMessage() {
   text += "Donate using the given webapp below👇!";
 
   const appUrlSetting = await Setting.findOne({ key: 'appUrl' });
-  const appUrl = appUrlSetting?.value || getCachedAppUrl() || '';
+  let appUrl = appUrlSetting?.value || getCachedAppUrl() || providedAppUrl || '';
+  if (!appUrl.startsWith('http') && providedAppUrl) {
+    appUrl = providedAppUrl;
+  }
 
   const keyboard = {
     inline_keyboard: [
@@ -1418,6 +1421,10 @@ apiRouter.post('/api/donations/send-message', async (req, res) => {
       return res.status(400).json({ error: 'Main bot is not initialized. Make sure TELEGRAM_BOT_TOKEN is configured.' });
     }
 
+    const reqProtocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const reqHost = req.headers.host;
+    const currentOrigin = `${reqProtocol}://${reqHost}`;
+
     const donations = await Donation.find({ status: 'Approved' });
     const sorted = donations.sort((a, b) => {
       const valA = a.method === 'crypto' ? a.amount * 83 : a.amount;
@@ -1451,7 +1458,20 @@ apiRouter.post('/api/donations/send-message', async (req, res) => {
     text += "Donate using the given webapp below👇!";
 
     const appUrlSetting = await Setting.findOne({ key: 'appUrl' });
-    const appUrl = appUrlSetting?.value || getCachedAppUrl() || '';
+    let appUrl = appUrlSetting?.value || getCachedAppUrl() || currentOrigin;
+    if (!appUrl.startsWith('http')) {
+      appUrl = currentOrigin;
+    }
+
+    // Auto-update appUrl in database settings and cache if it was empty/relative so we remember it
+    if (appUrl !== appUrlSetting?.value) {
+      await Setting.findOneAndUpdate(
+        { key: 'appUrl' },
+        { value: appUrl },
+        { upsert: true }
+      );
+      setCachedAppUrl(appUrl);
+    }
 
     const keyboard = {
       inline_keyboard: [
@@ -1544,6 +1564,10 @@ apiRouter.post('/api/donations/verify-upi', async (req, res) => {
       type: 'donation'
     });
 
+    const reqProtocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const reqHost = req.headers.host;
+    const currentOrigin = `${reqProtocol}://${reqHost}`;
+
     const newDonation = await Donation.create({
       name: name?.trim() || 'Anonymous',
       amount: realAmount,
@@ -1553,7 +1577,7 @@ apiRouter.post('/api/donations/verify-upi', async (req, res) => {
     });
 
     // Rebuild/Update main channel message
-    await updateDonationMessage();
+    await updateDonationMessage(currentOrigin);
 
     res.json({ success: true, donation: newDonation });
   } catch (err: any) {
@@ -1625,8 +1649,12 @@ apiRouter.post('/api/donations/moderate', async (req, res) => {
         type: 'donation'
       });
 
+      const reqProtocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const reqHost = req.headers.host;
+      const currentOrigin = `${reqProtocol}://${reqHost}`;
+
       // Update message
-      await updateDonationMessage();
+      await updateDonationMessage(currentOrigin);
       return res.json({ success: true, message: 'Donation approved successfully and channel message updated!' });
     } else {
       donation.status = 'Rejected';
