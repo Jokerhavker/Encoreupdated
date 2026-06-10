@@ -2906,3 +2906,314 @@ apiRouter.post('/api/mirror-bots/withdrawal-requests/:id/action', async (req, re
   }
 });
 
+// ==========================================
+// MASS API RUNNER ENDPOINTS
+// ==========================================
+
+apiRouter.get('/api/mass-run/profile', async (req, res) => {
+  try {
+    const { telegramId } = req.query;
+    if (!telegramId) {
+      return res.status(400).json({ error: 'Telegram User ID is required.' });
+    }
+
+    const user = await BotUser.findOne({ telegramId: String(telegramId) });
+    if (!user) {
+      return res.json({ exists: false, error: 'User profile not found. Please click /start inside the bot first to initialize.' });
+    }
+
+    // Determine premium tier
+    let isPremiumActive = user.isPremium;
+    if (isPremiumActive && user.premiumExpiresAt && new Date(user.premiumExpiresAt).getTime() < Date.now()) {
+      isPremiumActive = false;
+    }
+
+    const rawTier = (user.premiumTier || "").toLowerCase();
+    let computedTier: "TRIAL" | "BASIC" | "GOLD" | "MAX" | null = null;
+    
+    if (isPremiumActive) {
+      if (rawTier.includes("trial")) {
+        computedTier = "TRIAL";
+      } else if (rawTier.includes("basic")) {
+        computedTier = "BASIC";
+      } else if (rawTier.includes("gold")) {
+        computedTier = "GOLD";
+      } else if (rawTier.includes("max") || rawTier.includes("premium")) {
+        computedTier = "MAX";
+      } else {
+        // Fallback for valid premium status with unknown tier name
+        computedTier = "GOLD";
+      }
+    }
+
+    // Load available API commands definitions
+    const apiCommands = await Command.find({ isApi: true });
+
+    // Compute remaining command credits for each API command
+    // Format: { [commandName]: remainingCount }
+    const today = new Date().toISOString().split("T")[0];
+    const limits: Record<string, number> = {};
+
+    for (const cmdDef of apiCommands) {
+      if (user.isAdmin) {
+        limits[cmdDef.command] = 999999;
+      } else if (cmdDef.isCreditBased) {
+        let override = user.commandCredits?.find((c: any) => c.command === cmdDef.command);
+        let usage = user.commandUsage?.find((u: any) => u.command === cmdDef.command);
+        let usedToday = usage && usage.lastResetDate === today ? usage.used : 0;
+        let limit = override ? override.dailyLimit : cmdDef.defaultDailyCredits;
+        let isUnlimited = override ? override.isUnlimited : false;
+
+        if (isUnlimited) {
+          limits[cmdDef.command] = 999999;
+        } else {
+          const dailyRemaining = Math.max(0, limit - usedToday);
+          const commonCredits = user.commonCredits ? (user.commonCredits.get(cmdDef.command) || 0) : 0;
+          limits[cmdDef.command] = dailyRemaining + commonCredits;
+        }
+      } else {
+        limits[cmdDef.command] = 999999;
+      }
+    }
+
+    res.json({
+      success: true,
+      exists: true,
+      user: {
+        telegramId: user.telegramId,
+        username: user.username,
+        firstName: user.firstName,
+        isPremium: isPremiumActive,
+        premiumTier: user.premiumTier,
+        membershipType: computedTier,
+        isAdmin: user.isAdmin
+      },
+      apiCommands,
+      limits
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/mass-run/execute', async (req, res) => {
+  try {
+    const { telegramId, command, parameters } = req.body;
+    if (!telegramId || !command || !Array.isArray(parameters)) {
+      return res.status(400).json({ error: 'Missing process parameters (telegramId, command, parameters).' });
+    }
+
+    // 1. Check User
+    const user = await BotUser.findOne({ telegramId: String(telegramId) });
+    if (!user) {
+      return res.status(404).json({ error: 'User profile not found. Please click /start first to initialize.' });
+    }
+
+    // 2. Resolve Active Sub Tier
+    let isPremiumActive = user.isPremium;
+    if (isPremiumActive && user.premiumExpiresAt && new Date(user.premiumExpiresAt).getTime() < Date.now()) {
+      isPremiumActive = false;
+    }
+
+    const rawTier = (user.premiumTier || "").toLowerCase();
+    let computedTier: "TRIAL" | "BASIC" | "GOLD" | "MAX" | null = null;
+    
+    if (isPremiumActive) {
+      if (rawTier.includes("trial")) {
+        computedTier = "TRIAL";
+      } else if (rawTier.includes("basic")) {
+        computedTier = "BASIC";
+      } else if (rawTier.includes("gold")) {
+        computedTier = "GOLD";
+      } else if (rawTier.includes("max") || rawTier.includes("premium")) {
+        computedTier = "MAX";
+      } else {
+        computedTier = "GOLD";
+      }
+    }
+
+    if (!computedTier) {
+      return res.status(403).json({ error: 'Access Denied: You must purchase a subscription membership to enter and run commands in the Mass API runner.' });
+    }
+
+    // 3. Check parameters limit based on Membership tier
+    // TRIAL: 0
+    // BASIC: 5
+    // GOLD: 15
+    // MAX: 30
+    let maxParams = 0;
+    if (computedTier === "BASIC") maxParams = 5;
+    else if (computedTier === "GOLD") maxParams = 15;
+    else if (computedTier === "MAX") maxParams = 30;
+
+    if (computedTier === "TRIAL" || maxParams === 0) {
+      return res.status(403).json({ error: 'TRIAL MEMBERSHIP users are allowed a maximum of 0 parallel parameters. Please UPGRADE your membership plan inside the Bot Shop to run mass commands!' });
+    }
+
+    const paramCount = parameters.length;
+    if (paramCount === 0) {
+      return res.status(400).json({ error: 'Please enter at least one parameter to execute.' });
+    }
+
+    if (paramCount > maxParams) {
+      return res.status(400).json({ error: `${computedTier} members are limited to a maximum of ${maxParams} parameters at a time. You entered ${paramCount} parameters. Please upgrade your status or reduce the parameter list.` });
+    }
+
+    // 4. Check Credits Availability
+    const cmdDef = await Command.findOne({ command });
+    if (!cmdDef) {
+      return res.status(404).json({ error: `Command ${command} not found.` });
+    }
+
+    // Calculate how many runs are available
+    let availableRuns = 999999;
+    const today = new Date().toISOString().split("T")[0];
+
+    if (cmdDef.isCreditBased && !user.isAdmin) {
+      let override = user.commandCredits?.find((c: any) => c.command === command);
+      let usage = user.commandUsage?.find((u: any) => u.command === command);
+      let usedToday = usage && usage.lastResetDate === today ? usage.used : 0;
+      let limit = override ? override.dailyLimit : cmdDef.defaultDailyCredits;
+      let isUnlimited = override ? override.isUnlimited : false;
+
+      if (!isUnlimited) {
+        const dailyRemaining = Math.max(0, limit - usedToday);
+        const commonCredits = user.commonCredits ? (user.commonCredits.get(command) || 0) : 0;
+        availableRuns = dailyRemaining + commonCredits;
+      }
+    }
+
+    if (availableRuns < paramCount) {
+      return res.status(400).json({ 
+        error: `Insufficient Credits! You only have ${availableRuns} remaining runs/credits for ${command}, but you entered ${paramCount} lines. Please purchase more credits first!` 
+      });
+    }
+
+    // 5. Run parameters sequentially
+    const results = [];
+    const bot = getBot();
+
+    for (const p of parameters) {
+      const cleanParam = String(p).trim();
+      if (!cleanParam) continue;
+
+      let apiResponseText = "";
+      let finalUrl = cmdDef.apiUrl;
+
+      if (finalUrl) {
+        if (finalUrl.includes("{param}")) {
+          finalUrl = finalUrl.replace("{param}", encodeURIComponent(cleanParam));
+        }
+        
+        try {
+          const resAxios = await axios.get(finalUrl, { timeout: 15000 });
+          if (typeof resAxios.data === "object") {
+            apiResponseText = JSON.stringify(resAxios.data, null, 2);
+          } else {
+            apiResponseText = String(resAxios.data);
+          }
+        } catch (e: any) {
+          apiResponseText = `Error fetching data: ${e.response?.status ? `Status ${e.response.status}` : e.message}`;
+        }
+      } else {
+        apiResponseText = "No API configuration found for this command.";
+      }
+
+      // Format with decoratedMessage
+      let decorated = cmdDef.decoratedMessage || "{{api.response}}";
+      decorated = decorated.replace(/\\n/g, "\n");
+      decorated = decorated.replace(/\{\{api\.response\}\}/g, apiResponseText);
+
+      // Save record in Statlog history
+      await Statlog.create({
+        commandName: command,
+        telegramId: String(telegramId),
+        isGroup: false,
+        paramValue: cleanParam,
+        apiResponse: decorated,
+        timestamp: new Date()
+      });
+
+      // Deduct credits if applicable
+      if (cmdDef.isCreditBased && !user.isAdmin) {
+        let override = user.commandCredits?.find((c: any) => c.command === command);
+        let usage = user.commandUsage?.find((u: any) => u.command === command);
+        let usedToday = usage && usage.lastResetDate === today ? usage.used : 0;
+        let limit = override ? override.dailyLimit : cmdDef.defaultDailyCredits;
+        let isUnlimited = override ? override.isUnlimited : false;
+
+        if (!isUnlimited) {
+          if (usedToday < limit) {
+            // Deduct from daily limit
+            let usageIndex = user.commandUsage?.findIndex((u: any) => u.command === command);
+            if (usageIndex !== undefined && usageIndex >= 0) {
+              if (user.commandUsage[usageIndex].lastResetDate !== today) {
+                user.commandUsage[usageIndex].used = 1;
+                user.commandUsage[usageIndex].lastResetDate = today;
+              } else {
+                user.commandUsage[usageIndex].used += 1;
+              }
+            } else {
+              if (!user.commandUsage) user.commandUsage = [];
+              user.commandUsage.push({
+                command: command,
+                used: 1,
+                lastResetDate: today
+              });
+            }
+            user.markModified("commandUsage");
+          } else {
+            // Deduct from common credits
+            const currentCommon = user.commonCredits ? (user.commonCredits.get(command) || 0) : 0;
+            if (currentCommon > 0) {
+              user.commonCredits.set(command, currentCommon - 1);
+              user.markModified("commonCredits");
+              
+              // Try to notify the user on Telegram
+              try {
+                if (bot) {
+                  await bot.telegram.sendMessage(
+                    String(telegramId),
+                    `⚠️ *Common Credit Used via WebApp*\n\nYou have used 1 out of total available common credits for "${command}" via Mass API WebApp, now you have left "${currentCommon - 1}" Credits.`,
+                    { parse_mode: 'Markdown' }
+                  );
+                }
+              } catch (notifyErr) {
+                console.error("Failed sending DM to user for common credit deduction:", notifyErr);
+              }
+            }
+          }
+          await user.save();
+        }
+      }
+
+      results.push({
+        parameter: cleanParam,
+        output: decorated,
+        success: !apiResponseText.startsWith("Error fetching data:")
+      });
+    }
+
+    res.json({ success: true, results });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/api/mass-run/history', async (req, res) => {
+  try {
+    const { telegramId } = req.query;
+    if (!telegramId) {
+      return res.status(400).json({ error: 'Telegram User ID is required.' });
+    }
+
+    const historyLogs = await Statlog.find({ telegramId: String(telegramId) })
+      .sort({ timestamp: -1 })
+      .limit(50);
+
+    res.json({ success: true, history: historyLogs });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+

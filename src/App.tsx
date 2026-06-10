@@ -18,6 +18,7 @@ import { MirrorManager } from './pages/MirrorManager';
 import { MirrorAdmin } from './pages/MirrorAdmin';
 import Donate from './pages/Donate';
 import { Donations } from './pages/Donations';
+import { MassApiRunner } from './pages/MassApiRunner';
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/shop" element={<Shop />} />
         <Route path="/mirrors" element={<MirrorManager />} />
         <Route path="/donate" element={<Donate />} />
+        <Route path="/mass-run" element={<MassApiRunner />} />
         <Route element={<AdminGuard />}>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />

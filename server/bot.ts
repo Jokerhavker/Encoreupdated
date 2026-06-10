@@ -2003,6 +2003,7 @@ export async function initializeBot() {
 
           const appUrl = getAppUrl();
           const mirrorsUrl = `${appUrl}/mirrors?userid=${ctx.from?.id || ""}`;
+          const massRunUrl = `${appUrl}/mass-run?userid=${ctx.from?.id || ""}`;
 
           await ctx.reply(
             "✨ *Welcome to ENCORE XOSINT* ✨\n\n✅ *Status:* Bot is fully operational.\n\nYou can get multiple information using this bot. Try exploring some commands or use /help to see how it works!",
@@ -2014,6 +2015,12 @@ export async function initializeBot() {
                     {
                       text: "🤖 MAKE YOUR OWN BOT",
                       web_app: { url: mirrorsUrl },
+                    } as any,
+                  ],
+                  [
+                    {
+                      text: "🔎 MASS SEARCH",
+                      web_app: { url: massRunUrl },
                     } as any,
                   ],
                   [
