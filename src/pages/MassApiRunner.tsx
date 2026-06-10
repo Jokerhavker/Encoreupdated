@@ -216,9 +216,9 @@ export function MassApiRunner() {
   // Helper limits for the badge
   const getTierLimitText = (tier: string) => {
     switch(tier) {
-      case 'BASIC': return 'Max 5 Parameters';
-      case 'GOLD': return 'Max 15 Parameters';
-      case 'MAX': return 'Max 30 Parameters';
+      case 'BASIC': return 'Max 10 Parameters';
+      case 'GOLD': return 'Max 25 Parameters';
+      case 'MAX': return 'Max 50 Parameters';
       default: return 'Max 0 Parameters';
     }
   };
@@ -257,14 +257,14 @@ export function MassApiRunner() {
             <span className="text-[10px] text-indigo-400 font-mono block tracking-wider uppercase mb-1">Standard Resolution:</span>
             <p className="text-xs text-slate-300 leading-normal">
               1. Open your Telegram Messenger.<br/>
-              2. Go to the <strong className="text-white">@encorexosint</strong> Bot.<br/>
+              2. Go to the <strong className="text-white">@TEMPENCOREXBOT</strong> Bot.<br/>
               3. Press the <strong className="text-white">Start / Restart</strong> button.<br/>
               4. Relaunch this workspace tool.
             </p>
           </div>
 
           <a 
-            href="https://t.me/encorexosint" 
+            href="https://t.me/TEMPENCOREXBOT" 
             target="_blank" 
             referrerPolicy="no-referrer"
             className="w-full bg-indigo-600 hover:bg-indigo-700 transition font-bold py-3 px-4 rounded-xl inline-flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/25"
@@ -303,7 +303,7 @@ export function MassApiRunner() {
               <div>
                 <h4 className="text-xs font-bold text-slate-200">Mass Sequential Execution</h4>
                 <p className="text-[10px] text-slate-400 mt-0.5 leading-normal">
-                  Bulk check and pull values for up to 30 parameters sequentially in a single click in seconds.
+                  Bulk check and pull values for up to 50 parameters sequentially in a single click in seconds.
                 </p>
               </div>
             </div>
@@ -327,7 +327,7 @@ export function MassApiRunner() {
               <div>
                 <h4 className="text-xs font-bold text-slate-200">Scale Up Custom Limits</h4>
                 <p className="text-[10px] text-slate-400 mt-0.5 leading-normal">
-                  Tiers support elevated parallel runs. BASIC allows 5, GOLD allows 15, and MAX allows 30 concurrent paths.
+                  Tiers support elevated parallel runs. BASIC allows 10, GOLD allows 25, and MAX allows 50 concurrent paths.
                 </p>
               </div>
             </div>
@@ -344,7 +344,7 @@ export function MassApiRunner() {
           </div>
 
           <a 
-            href={`https://t.me/encorexosint?start=shop`}
+            href={`https://t.me/TEMPENCOREXBOT?start=shop`}
             target="_blank"
             referrerPolicy="no-referrer"
             className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 transition font-black py-3 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/30 text-sm text-white"
@@ -378,21 +378,21 @@ export function MassApiRunner() {
             <div className="grid grid-cols-3 gap-2 text-center text-xs">
               <div className="p-2 border border-slate-800 bg-slate-900/50 rounded-lg">
                 <strong className="text-white block font-black">Basic</strong>
-                <span className="text-[10px] text-slate-400">5 parameters</span>
+                <span className="text-[10px] text-slate-400">10 parameters</span>
               </div>
               <div className="p-2 border border-indigo-500/30 bg-indigo-950/20 rounded-lg">
                 <strong className="text-indigo-300 block font-black">Gold</strong>
-                <span className="text-[10px] text-indigo-200">15 parameters</span>
+                <span className="text-[10px] text-indigo-200">25 parameters</span>
               </div>
               <div className="p-2 border border-purple-500/30 bg-purple-950/20 rounded-lg">
                 <strong className="text-purple-300 block font-black">Max</strong>
-                <span className="text-[10px] text-purple-200">30 parameters</span>
+                <span className="text-[10px] text-purple-200">50 parameters</span>
               </div>
             </div>
           </div>
 
           <a 
-            href={`https://t.me/encorexosint?start=shop`}
+            href={`https://t.me/TEMPENCOREXBOT?start=shop`}
             target="_blank"
             referrerPolicy="no-referrer"
             className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 transition font-black py-3 px-4 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/30 text-sm text-white"
@@ -410,9 +410,9 @@ export function MassApiRunner() {
   const rawParamsCount = cleanParamsList.length;
   
   let membershipLimit = 0;
-  if (userProfile.membershipType === 'BASIC') membershipLimit = 5;
-  else if (userProfile.membershipType === 'GOLD') membershipLimit = 15;
-  else if (userProfile.membershipType === 'MAX') membershipLimit = 30;
+  if (userProfile.membershipType === 'BASIC') membershipLimit = 10;
+  else if (userProfile.membershipType === 'GOLD') membershipLimit = 25;
+  else if (userProfile.membershipType === 'MAX') membershipLimit = 50;
 
   const currentCommandLimit = limits[selectedCommand] !== undefined ? limits[selectedCommand] : 0;
   const isSufficientCredits = currentCommandLimit >= rawParamsCount;

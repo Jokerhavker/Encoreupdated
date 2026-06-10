@@ -3038,13 +3038,13 @@ apiRouter.post('/api/mass-run/execute', async (req, res) => {
 
     // 3. Check parameters limit based on Membership tier
     // TRIAL: 0
-    // BASIC: 5
-    // GOLD: 15
-    // MAX: 30
+    // BASIC: 10
+    // GOLD: 25
+    // MAX: 50
     let maxParams = 0;
-    if (computedTier === "BASIC") maxParams = 5;
-    else if (computedTier === "GOLD") maxParams = 15;
-    else if (computedTier === "MAX") maxParams = 30;
+    if (computedTier === "BASIC") maxParams = 10;
+    else if (computedTier === "GOLD") maxParams = 25;
+    else if (computedTier === "MAX") maxParams = 50;
 
     if (computedTier === "TRIAL" || maxParams === 0) {
       return res.status(403).json({ error: 'TRIAL MEMBERSHIP users are allowed a maximum of 0 parallel parameters. Please UPGRADE your membership plan inside the Bot Shop to run mass commands!' });

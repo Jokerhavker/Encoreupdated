@@ -486,6 +486,24 @@ export function Shop() {
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />
                               <span>Flat <strong>{tier.discountPercent}% OFF</strong> on separate credit checkouts</span>
                             </div>
+
+                            {(() => {
+                              const lowercaseId = (tier.id || "").toLowerCase();
+                              let limit = 0;
+                              if (lowercaseId.includes("basic")) limit = 10;
+                              else if (lowercaseId.includes("gold")) limit = 25;
+                              else if (lowercaseId.includes("max") || lowercaseId.includes("premium")) limit = 50;
+
+                              if (limit > 0) {
+                                return (
+                                  <div className="flex items-center gap-2 text-[11px] bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 px-2.5 py-1.5 rounded-xl text-indigo-200 transition">
+                                    <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                    <span>🔎 <strong>MASS SEARCH</strong>: Max <strong>{limit} parameters</strong> / run</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
 
                           <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-4">
