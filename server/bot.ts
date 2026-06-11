@@ -708,7 +708,7 @@ export async function initializeBot() {
 
         // Check Main Group (Encore)
         const isMainGroup =
-          String(ctx.chat.username).toLowerCase() === "encorexgroup";
+          String(ctx.chat.username).toLowerCase() === "encorexg";
         if (isMainGroup) {
           await groupDoc.save();
         } else {
@@ -1234,7 +1234,7 @@ export async function initializeBot() {
           "✨ Use `/profile` to check your exact global/command credit usage.\n\n";
 
         txt +=
-          "↗️ *Join our Main Group:* [ENCOREX GROUP](https://t.me/encorexgroup)\n\n";
+          "↗️ *Join our Main Group:* [ENCOREX GROUP](https://t.me/encorexg)\n\n";
 
         txt += "⚡️ *Available Commands*\n\n";
         for (const c of commands) {
@@ -2278,7 +2278,7 @@ export async function initializeBot() {
                     [
                       {
                         text: "↗️ Join Group (Free)",
-                        url: "https://t.me/encorexgroup",
+                        url: "https://t.me/encorexg",
                         style: "primary",
                       } as any,
                     ],
