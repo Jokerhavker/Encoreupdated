@@ -8,6 +8,7 @@ export function Settings() {
   const [monetagEnabled, setMonetagEnabled] = useState<boolean>(true);
   const [adGapMinutes, setAdGapMinutes] = useState<number>(10);
   const [appUrl, setAppUrl] = useState<string>('');
+  const [botMaintenanceMode, setBotMaintenanceMode] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [webhookStatus, setWebhookStatus] = useState<{loading: boolean, result: any}>({ loading: false, result: null });
 
@@ -38,6 +39,11 @@ export function Settings() {
       if (appUrlSetting) {
           setAppUrl(String(appUrlSetting.value || ''));
       }
+
+      const maintenanceSetting = res.data.find((s: any) => s.key === 'botMaintenanceMode');
+      if (maintenanceSetting) {
+          setBotMaintenanceMode(!!maintenanceSetting.value);
+      }
       
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -51,7 +57,8 @@ export function Settings() {
           { key: 'defaultGroupCredits', value: defaultGroupCredits },
           { key: 'rewardSettings', value: { Monetag: monetagEnabled } },
           { key: 'adGapMinutes', value: adGapMinutes },
-          { key: 'appUrl', value: appUrl.trim() }
+          { key: 'appUrl', value: appUrl.trim() },
+          { key: 'botMaintenanceMode', value: botMaintenanceMode }
         ]
       });
       alert('Settings saved successfully!');
@@ -210,6 +217,27 @@ export function Settings() {
               }`}
             >
               {monetagEnabled ? 'Active (Enabled)' : 'Inactive (Disabled)'}
+            </button>
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Bot Maintenance Mode</h3>
+          <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-lg">
+            <div>
+              <span className="text-sm font-semibold text-amber-900 border-b pb-1 mb-1 block">Toggle Global Maintenance Mode</span>
+              <p className="text-xs text-amber-700 leading-relaxed">When active, every command on the bot will tell the user that the bot is on maintenance. All webapps (except the donation page) will also show maintenance alerts and suspend user features.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBotMaintenanceMode(!botMaintenanceMode)}
+              className={`px-4 py-2 rounded-xl text-xs font-black shadow-md transition-all shrink-0 ${
+                botMaintenanceMode 
+                  ? 'bg-amber-600 text-white hover:bg-amber-700 border border-amber-550' 
+                  : 'bg-slate-100 text-slate-500 border border-slate-350 hover:bg-slate-200'
+              }`}
+            >
+              {botMaintenanceMode ? 'ACTIVE (Maintenance On)' : 'INACTIVE (Normal Run)'}
             </button>
           </div>
         </div>

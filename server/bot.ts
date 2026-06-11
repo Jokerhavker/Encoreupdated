@@ -1913,6 +1913,12 @@ export async function initializeBot() {
 
       if (!text.startsWith("/")) return;
 
+      const maintenanceSetting = await Setting.findOne({ key: 'botMaintenanceMode' });
+      if (maintenanceSetting && maintenanceSetting.value === true) {
+        await ctx.reply("🤖 The bot is currently under maintenance. This service is suspended temporarily!");
+        return;
+      }
+
       const parts = text.split(" ");
       let userCommand = parts[0];
       if (userCommand.includes("@")) {
@@ -2186,6 +2192,11 @@ export async function initializeBot() {
 
         if (!cmdDef) {
           console.log(`[Bot Text Handler] Logic block: command "${userCommand}" has NO entry/definition in the DB. Ignoring.`);
+          return;
+        }
+
+        if (cmdDef.isMaintenance === true) {
+          await ctx.reply(`⚠️ The command \`${cmdDef.command}\` is currently under maintenance. No credits will be deducted!`, replyOptions);
           return;
         }
 

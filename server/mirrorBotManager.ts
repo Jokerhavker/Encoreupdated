@@ -1486,6 +1486,11 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
 
       if (!cmdDef) return; // Command not found anywhere
 
+      if (cmdDef.isMaintenance === true) {
+        await ctx.reply(`⚠️ The command \`${cmdDef.command}\` is currently under maintenance. No credits will be deducted!`, replyOptions);
+        return;
+      }
+
       // Private chat check: user must start bot privately before running commands in groups (Requirement 1 fallback)
       let userDoc = await BotUser.findOne({ telegramId: String(ctx.from?.id) });
       if (isGroup && (!userDoc || !userDoc.hasStartedBot)) {

@@ -34,11 +34,12 @@ export function Commands() {
           <div key={cmd._id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition">
             <div className="p-5">
               <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-lg font-bold text-indigo-700">{cmd.command}</span>
                   {cmd.isPremium && <Lock className="w-4 h-4 text-amber-500" title="Premium / Paid Command" />}
                   {cmd.isCreditBased && <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase" title="Credit Based Command">Credit</span>}
                   {cmd.isApi && <Network className="w-4 h-4 text-emerald-500" title="API Backend" />}
+                  {cmd.isMaintenance && <span className="text-[9px] font-black bg-rose-100 border border-rose-250 text-rose-800 px-1.5 py-0.5 rounded uppercase shrink-0">Maintenance</span>}
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setEditing(cmd)} className="p-1.5 text-gray-400 hover:text-indigo-600"><Edit2 className="w-4 h-4" /></button>
@@ -121,6 +122,10 @@ function CommandModal({ cmd, onClose, onSave }: any) {
             <div className="flex items-center gap-2 w-full md:w-auto break-words">
               <input type="checkbox" id="isApi" checked={form.isApi} onChange={e => setForm({...form, isApi: e.target.checked})} className="rounded text-indigo-600 border-gray-300" />
               <label htmlFor="isApi" className="text-sm font-medium text-gray-700">Fetch dynamic data from API?</label>
+            </div>
+            <div className="flex items-center gap-2 w-full md:w-auto break-words border-t md:border-t-0 md:border-l pt-2 md:pt-0 md:pl-4 border-gray-300">
+              <input type="checkbox" id="isMaintenance" checked={form.isMaintenance || false} onChange={e => setForm({...form, isMaintenance: e.target.checked})} className="rounded text-rose-600 border-gray-300" />
+              <label htmlFor="isMaintenance" className="text-sm font-black text-rose-700">⚠️ Maintenance Mode On</label>
             </div>
           </div>
 

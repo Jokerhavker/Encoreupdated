@@ -1403,6 +1403,15 @@ async function updateDonationMessage(providedAppUrl?: string) {
   }
 }
 
+apiRouter.get('/api/bot-maintenance-status', async (req, res) => {
+  try {
+    const maintenanceSetting = await Setting.findOne({ key: 'botMaintenanceMode' });
+    res.json({ maintenance: !!maintenanceSetting?.value });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, maintenance: false });
+  }
+});
+
 // Donation Endpoints
 apiRouter.get('/api/donations/config', async (req, res) => {
   try {

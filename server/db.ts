@@ -20,6 +20,7 @@ const CommandSchema = new mongoose.Schema({
     label: { type: String },
     url: { type: String }
   }],
+  isMaintenance: { type: Boolean, default: false },
 }, { timestamps: true });
 
 const UserSchema = new mongoose.Schema({
