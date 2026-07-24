@@ -498,23 +498,11 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
     const useMainBotRedirect = isSandbox || isAppUrlSandbox;
 
     const messageText = `🛍️ *Bot Shop* 🛍️\n\n` +
-      `Upgrade your account status or purchase command credits to unlock higher daily command limits!\n\n` +
-      `Your purchases apply globally across all our bot mirrors. Select an option below:`;
+      `⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\n` +
+      `Thank you for your interest! Purchases, premium memberships, and credit top-ups are temporarily suspended. Please check back in a few days.`;
 
     const keyboard = {
       inline_keyboard: [
-        [
-          useMainBotRedirect
-            ? { text: "🛍️ OPEN MAIN BOT STORE", url: `https://t.me/${mainBotUsername}?start=shop` }
-            : { text: "🛍️ OPEN STORE IN WEBAPP", web_app: { url: shopUrl } }
-        ],
-        [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" }],
-        [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" }],
-        [
-          useMainBotRedirect
-            ? { text: "🤖 MAKE YOUR OWN BOT", url: `https://t.me/${mainBotUsername}?start=mirrors` }
-            : { text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors?userid=${ctx.from?.id || ""}` } }
-        ],
         [{ text: "🔙 Back to Start", callback_data: "view_start" }]
       ]
     };
@@ -945,38 +933,15 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
   // Register interactive in-bot shop Telegraf Action callbacks
   bot.action("shop_sub_tier_menu", async (ctx) => {
     try {
-      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
-      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
-
-      let messageText = "🎫 *Purchase Bot Membership* 🎫\n\n" +
-        "Bypass all default daily search limits, unlock API commands in private chat, and gain a flat discount on credit purchase checkouts!\n\n" +
-        "Select a billing tier below to see plans and benefits:";
-
-      const subButtons = [];
-      for (const tier of tiers) {
-        subButtons.push([{
-          text: `👑 ${tier.name} - ₹${tier.price}/month`,
-          callback_data: `shop_sub_details:${tier.id}`
-        }]);
-      }
-
-      if (subButtons.length === 0) {
-        subButtons.push([{
-          text: "👑 Bot Premium (Monthly) - ₹80/month",
-          callback_data: "shop_sub_details:premium"
-        }]);
-      }
-
-      subButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
-
-      await ctx.editMessageText(messageText, {
+      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and memberships are temporarily suspended. Please check back in a few days.`, {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: subButtons }
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
+        }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (err: any) {
-      console.error(err);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading tiers").catch(() => ({}));
+    } catch (err) {
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     }
   });
 
@@ -1153,35 +1118,15 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
 
   bot.action("shop_credits_menu", async (ctx) => {
     try {
-      const sellableCommands = await Command.find({ isForSale: true });
-
-      let messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
-        "Purchase custom credit counts to power individual API integration search commands. Standard unit rates apply.\n\n" +
-        "Select a command bundle below to see details and pricing:";
-
-      const credButtons = [];
-      for (const cmd of sellableCommands) {
-        credButtons.push([{
-          text: `🔑 ${cmd.command} (₹${cmd.pricePerCredit || 0.5}/credit)`,
-          callback_data: `shop_credit_details:${cmd.command}`
-        }]);
-      }
-
-      if (credButtons.length === 0) {
-        messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
-          "No separate command credit packages are currently configured/published in the shop. Check again later!";
-      }
-
-      credButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
-
-      await ctx.editMessageText(messageText, {
+      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and credits are temporarily suspended. Please check back in a few days.`, {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: credButtons }
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
+        }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (e: any) {
-      console.error(e);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading credit packs").catch(() => ({}));
+    } catch (err) {
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     }
   });
 

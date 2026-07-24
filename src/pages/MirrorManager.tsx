@@ -2193,20 +2193,13 @@ export function MirrorManager() {
 
                 {/* UPI Checkout Screen Portal Modal */}
                 {checkoutPlan && (() => {
-                  const upiUrl = `upi://pay?pa=alkhkumar@fam&pn=Encore%20Xosint&am=${checkoutPlan.price}&cu=INR&tn=${encodeURIComponent(`Upgrade to ${checkoutPlan.name} Tier`)}`;
                   return (
                     <div className="fixed inset-0 bg-indigo-950/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 font-sans animate-fade-in">
                       <div className="bg-white rounded-2xl max-w-sm w-full p-6 border shadow-2xl space-y-4 text-left max-h-[90vh] overflow-y-auto">
                         <div className="flex justify-between items-start border-b pb-2">
                           <div>
-                            <h4 className="font-extrabold text-sm text-gray-950">Secure UPI Checkout Terminal</h4>
+                            <h4 className="font-extrabold text-sm text-gray-950">Payment Gateway Offline</h4>
                             <p className="text-[10px] text-gray-450 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
-                            <div className="mt-1 bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5 text-[9px] font-black w-fit uppercase font-mono">
-                              {checkoutPlan.id === 'silver' ? 'Contains 50,000 Points/mo' : ''}
-                              {checkoutPlan.id === 'gold' ? 'Contains 200,000 Points/mo' : ''}
-                              {checkoutPlan.id === 'max' ? 'Contains 1,500,000 Points/mo' : ''}
-                              {!['silver', 'gold', 'max'].includes(checkoutPlan.id) ? 'Contains 10,000 Points/mo' : ''}
-                            </div>
                           </div>
                           <button 
                             onClick={() => setCheckoutPlan(null)}
@@ -2216,70 +2209,23 @@ export function MirrorManager() {
                           </button>
                         </div>
 
-                        {/* QR Code Section */}
-                        <div className="flex flex-col items-center justify-center space-y-2 border pb-4 bg-gray-50/50 rounded-xl p-4 border-gray-100">
-                          <span className="text-[9px] uppercase font-black text-indigo-900 tracking-wider">Scan QR Code to Pay ₹{checkoutPlan.price}</span>
-                          <div className="flex items-center justify-center bg-white p-2.5 rounded-2xl border border-gray-200/80 shadow-md relative w-44 h-44">
-                            <img 
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=170x170&data=${encodeURIComponent(upiUrl)}`}
-                              alt="UPI QR Code"
-                              className="w-40 h-40 block"
-                              referrerPolicy="no-referrer"
-                            />
+                        <div className="py-6 text-center space-y-4">
+                          <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center text-rose-500 mx-auto border border-rose-100">
+                            🔒
                           </div>
-                          <p className="text-[9px] text-gray-400 font-medium italic text-center px-2 leading-normal">
-                            Scan with Google Pay, PhonePe, Paytm, FamPay, or any BHIM UPI Application.
+                          <h4 className="text-base font-black text-rose-800">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
+                          <p className="text-xs text-slate-500 leading-relaxed text-center font-sans">
+                            Thank you for your interest! Purchases, tier renewals, and mirror bot plans are temporarily suspended. Please check back in a few days.
                           </p>
                         </div>
 
-                        <div className="space-y-3.5">
-                          <div className="border border-amber-150 bg-amber-50 rounded-xl p-3 text-[10px] text-amber-900 leading-relaxed font-semibold">
-                            ⚠️ DOUBLE-SPEND REACTION SYSTEM ACTIVE: Ensure you copy-paste the exact 12-digit transaction ID / UTR hash from your UPI application after successful transfer. Simulated transactions are automatically filtered.
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[10px] uppercase font-bold text-indigo-950 block">UPI Transaction UTR / Ref</label>
-                            <div className="bg-indigo-50/70 border border-indigo-100 text-indigo-950 text-[10px] rounded-lg p-2.5 leading-relaxed">
-                              📝 <b>Note:</b> If you paid through the Fampay app, you can put your <b>Fampay transaction ID</b> also instead of the UTR.
-                            </div>
-                            <input 
-                              type="text"
-                              placeholder="e.g. 614050212984 or FMPIB9943751810"
-                              value={utrInput}
-                              onChange={(e) => setUtrInput(e.target.value.replace(/[^a-zA-Z0-9]/g, '').substring(0, 24).toUpperCase())}
-                              className="w-full border rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                            <p className="text-[9px] text-gray-400">Provide either a 12-digit UPI number sequence or Fampay Transaction ID.</p>
-                          </div>
-
-                          {payError && (
-                            <div className="p-3 bg-red-50 border border-red-100 text-red-800 text-[10px] rounded-lg font-bold">
-                              ❌ {payError}
-                            </div>
-                          )}
-
-                          {paySuccess && (
-                            <div className="p-3 bg-green-50 border border-green-100 text-green-800 text-[10px] rounded-lg font-bold font-sans">
-                              🎉 {paySuccess}
-                            </div>
-                          )}
-
-                          <div className="flex gap-2 justify-end pt-2 border-t font-sans">
-                            <button
-                              onClick={() => setCheckoutPlan(null)}
-                              disabled={paymentProcessing}
-                              className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => handleVerifySubPayment(checkoutPlan.id, checkoutPlan.price)}
-                              disabled={paymentProcessing}
-                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer flex items-center justify-center gap-1"
-                            >
-                              {paymentProcessing ? 'Verifying payment...' : 'Verify Transfer & Activate'}
-                            </button>
-                          </div>
+                        <div className="flex gap-2 justify-end pt-2 border-t font-sans">
+                          <button
+                            onClick={() => setCheckoutPlan(null)}
+                            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-xl text-xs cursor-pointer text-center"
+                          >
+                            Okay
+                          </button>
                         </div>
                       </div>
                     </div>

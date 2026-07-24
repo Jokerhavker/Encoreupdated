@@ -71,39 +71,21 @@ async function verifyFampayPayment(paymentId: string, amount: number) {
 async function showBotShopMenu(ctx: any) {
   const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
   if (isGroup) {
-    const botUsername = ctx.botInfo?.username || "bot";
     await ctx.reply(
-      `🛒 *ENCORE XOSINT Shop*\n\nHey there, you can buy premium subscription or additional credits directly in our shop! Check it out in private chat:`,
+      `⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nOur bot shop is temporarily suspended. No purchases can be made at this moment.`,
       {
         parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🛍️ Open Shop",
-                url: `https://t.me/${botUsername}?start=shop`,
-                style: "success",
-              } as any,
-            ],
-          ],
-        },
       }
     ).catch(() => {});
     return;
   }
 
-  const appUrl = getAppUrl();
-  const shopUrl = `${appUrl}/shop?userid=${ctx.from?.id || ""}`;
-
   const messageText = `🛍️ *ENCORE XOSINT Bot Shop* 🛍️\n\n` +
-    `Welcome to the bot shop! Here you can buy premium membership subscriptions or buy separate credits for specific command integrations.\n\n` +
-    `Choose an option below to proceed:`;
+    `⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\n` +
+    `Thank you for your interest! Purchases, premium subscriptions, and credit top-ups are temporarily suspended. Please check back in a few days.`;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "🔗 OPEN STORE IN WEBAPP", web_app: { url: shopUrl } } as any],
-      [{ text: "🎫 PURCHASE BOT MEMBERSHIP", callback_data: "shop_sub_tier_menu" } as any],
-      [{ text: "⚡ BUY COMMAND CREDITS", callback_data: "shop_credits_menu" } as any],
       [{ text: "🔙 Back to Start", callback_data: "view_start" } as any],
     ]
   };
@@ -1078,6 +1060,40 @@ export async function initializeBot() {
     return next();
   });
 
+  // Global Bot Maintenance Check Middleware
+  bot.use(async (ctx, next) => {
+    // Only intercept messages or callback queries
+    if (!ctx.message && !ctx.callbackQuery) {
+      return next();
+    }
+
+    try {
+      const setting = await Setting.findOne({ key: 'botMaintenanceMode' });
+      if (setting && setting.value === true) {
+        // Admins bypass maintenance mode to allow configuration/updates
+        const userId = ctx.from?.id;
+        if (userId) {
+          const userDoc = await BotUser.findOne({ telegramId: String(userId) });
+          if (userDoc && userDoc.isAdmin) {
+            return next();
+          }
+        }
+
+        const maintenanceText = "⚠️ *Bot is on maintenance! This service is suspended temporary!*";
+        if (ctx.callbackQuery) {
+          await ctx.answerCbQuery("⚠️ Bot is on maintenance! This service is suspended temporary!", { show_alert: true }).catch(() => {});
+          return;
+        } else {
+          await ctx.reply(maintenanceText, { parse_mode: "Markdown" }).catch(() => {});
+          return;
+        }
+      }
+    } catch (err) {
+      console.error("Error in bot maintenance middleware", err);
+    }
+    return next();
+  });
+
   bot.action("limit_info", async (ctx) => {
     return ctx
       .answerCbQuery(
@@ -1581,38 +1597,15 @@ export async function initializeBot() {
 
   bot.action("shop_sub_tier_menu", async (ctx) => {
     try {
-      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
-      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
-
-      let messageText = "🎫 *Purchase Bot Membership* 🎫\n\n" +
-        "Bypass all default daily search limits, unlock API commands in private chat, and gain a flat discount on credit purchase checkouts!\n\n" +
-        "Select a billing tier below to see plans and benefits:";
-
-      const subButtons = [];
-      for (const tier of tiers) {
-        subButtons.push([{
-          text: `👑 ${tier.name} - ₹${tier.price}/month`,
-          callback_data: `shop_sub_details:${tier.id}`
-        }]);
-      }
-
-      if (subButtons.length === 0) {
-        subButtons.push([{
-          text: "👑 Bot Premium (Monthly) - ₹80/month",
-          callback_data: "shop_sub_details:premium"
-        }]);
-      }
-
-      subButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
-
-      await ctx.editMessageText(messageText, {
+      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and memberships are temporarily suspended. Please check back in a few days.`, {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: subButtons }
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
+        }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (err: any) {
-      console.error(err);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading tiers").catch(() => ({}));
+    } catch (err) {
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     }
   });
 
@@ -1792,35 +1785,15 @@ export async function initializeBot() {
 
   bot.action("shop_credits_menu", async (ctx) => {
     try {
-      const sellableCommands = await Command.find({ isForSale: true });
-
-      let messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
-        "Purchase custom credit counts to power individual API integration search commands. Standard unit rates apply.\n\n" +
-        "Select a command bundle below to see details and pricing:";
-
-      const credButtons = [];
-      for (const cmd of sellableCommands) {
-        credButtons.push([{
-          text: `🔑 ${cmd.command} (₹${cmd.pricePerCredit || 0.5}/credit)`,
-          callback_data: `shop_credit_details:${cmd.command}`
-        }]);
-      }
-
-      if (credButtons.length === 0) {
-        messageText = "⚡ *Buy Command Credits* ⚡\n\n" +
-          "No separate command credit packages are currently configured/published in the shop. Check again later!";
-      }
-
-      credButtons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
-
-      await ctx.editMessageText(messageText, {
+      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and credits are temporarily suspended. Please check back in a few days.`, {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: credButtons }
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
+        }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
-    } catch (e: any) {
-      console.error(e);
-      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading credit packs").catch(() => ({}));
+    } catch (err) {
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     }
   });
 

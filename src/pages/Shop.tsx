@@ -343,6 +343,19 @@ export function Shop() {
           </button>
         </div>
 
+        {/* PAYMENT WINDOW IS CLOSED WARNING BANNER */}
+        <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30 rounded-2xl p-4 mb-6 flex gap-3 items-start text-left">
+          <div className="bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 p-2 rounded-xl leading-none">
+            🔒
+          </div>
+          <div>
+            <h4 className="text-sm font-black text-rose-800 dark:text-rose-400">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
+            <p className="text-xs text-rose-700/80 dark:text-rose-400/80 mt-1 leading-normal">
+              Purchases, premium memberships, and credit top-ups are temporarily offline. Our shop system is in maintenance mode.
+            </p>
+          </div>
+        </div>
+
         {/* User Card */}
         {user && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-md border border-slate-100 dark:border-gray-800/80 p-5 mb-6" id="user_profile_card">
@@ -792,85 +805,20 @@ export function Shop() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                
-                {/* Visual Step QR code generation */}
-                <div className="text-center">
-                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                    Step 1: Scan & Pay ₹{checkoutItem.price}
-                  </p>
-                  
-                  {/* UPI QR Frame */}
-                  <div className="inline-block p-4 bg-white rounded-xl border border-slate-250/80 shadow-md">
-                    <img 
-                      src={getQrCodeSrc()} 
-                      alt="UPI QR Code Payment and Verification" 
-                      className="w-48 h-48 mx-auto" 
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="mt-2 text-[10px] font-bold text-slate-500 tracking-tight flex items-center justify-center gap-1">
-                      <Smartphone className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Scan QR Code with UPI App</span>
-                    </div>
-                  </div>
-                  
-                  <p className="text-[10px] text-slate-400 max-w-xs mx-auto mt-2 leading-tight">
-                    Scan with any UPI application (GPay, Paytm, PhonePe, FamPay, etc.) to pay exactly <span className="font-extrabold text-slate-800 dark:text-slate-200">₹{checkoutItem.price}</span>.
-                  </p>
+              <div className="text-center py-6 space-y-4" id="payment_closed_screen">
+                <div className="w-16 h-16 bg-rose-50 dark:bg-rose-950/40 rounded-full flex items-center justify-center text-rose-500 mx-auto border border-rose-100 dark:border-rose-900/30">
+                  🔒
                 </div>
-
-                {/* Input forms for verification */}
-                <div className="pt-4 border-t border-slate-100 dark:border-gray-850">
-                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                    Step 2: Enter Transaction UTR / ID
-                  </p>
-                  
-                  <div className="space-y-2">
-                    <div>
-                      <input 
-                        type="text" 
-                        value={paymentId}
-                        onChange={(e) => setPaymentId(e.target.value)}
-                        placeholder="Enter 12-digit UPI UTR"
-                        className="w-full p-2.5 rounded-xl text-center font-mono font-bold tracking-widest text-[#000] bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-sm"
-                        disabled={paymentLoading}
-                        id="payment_id_input"
-                      />
-                      <p className="text-[9px] text-slate-400 leading-normal mt-1.5 flex items-start gap-1">
-                        <AlertCircle className="w-3.5 h-3.5 text-slate-450 shrink-0 mt-0.5" />
-                        <span>
-                          <strong>Note:</strong> Enter final Settlement transaction Number. If paid via Fampay app, enter <strong>Fampay Transaction ID</strong> directly (e.g. starting with FMP).
-                        </span>
-                      </p>
-                    </div>
-
-                    {paymentError && (
-                      <div className="bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 p-2.5 rounded-lg text-[11px] font-medium border border-red-100 dark:border-red-900/30 flex items-start gap-1.5 leading-relaxed">
-                        <AlertCircle className="w-4 h-4 shrink-0" />
-                        <span>{paymentError}</span>
-                      </div>
-                    )}
-
-                    <button 
-                      onClick={verifyPayment}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl py-3 text-xs tracking-wide transition-all shadow-md mt-1 disabled:opacity-50 flex items-center justify-center gap-2"
-                      disabled={paymentLoading || !paymentId.trim()}
-                      id="submit_verify_btn"
-                    >
-                      {paymentLoading ? (
-                        <>
-                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          Verifying settlement trans...
-                        </>
-                      ) : (
-                        <>
-                          <ShieldCheck className="w-4 h-4" /> Submit & Verify Payment
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
+                <h4 className="text-base font-black text-rose-700 dark:text-rose-400">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
+                  Purchases, premium memberships, and credit top-ups are temporarily suspended. Please check back in a few days.
+                </p>
+                <button 
+                  onClick={handleCloseCheckout}
+                  className="w-full bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white font-extrabold rounded-xl py-3 text-xs tracking-wide transition-all shadow-md mt-4"
+                >
+                  Okay
+                </button>
               </div>
             )}
 
