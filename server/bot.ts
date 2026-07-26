@@ -2482,19 +2482,19 @@ export async function initializeBot() {
           shouldIncrementCredit,
         );
       } catch (e: any) {
-        console.error(e);
+        console.error("Bot command execution error:", e);
         try {
-          await ctx.reply(`❌ *Bot Error*\n\`${e.message}\``, {
+          await ctx.reply(`❌ *ERROR HAPPENED*`, {
             parse_mode: "Markdown",
             reply_parameters: { message_id: ctx.message.message_id },
           });
         } catch (innerErr) {
           try {
-            await ctx.reply(`❌ Bot Error:\n${e.message}`, {
+            await ctx.reply(`❌ ERROR HAPPENED`, {
               reply_parameters: { message_id: ctx.message.message_id },
             });
           } catch (innerErr2) {
-            await ctx.reply(`❌ Bot Error:\n${e.message}`).catch(() => {});
+            await ctx.reply(`❌ ERROR HAPPENED`).catch(() => {});
           }
         }
       }

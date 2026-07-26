@@ -1533,6 +1533,17 @@ export async function startMirrorBot(mirrorBotDoc: any, skipSetupWebhook = false
       await executeCommandCore(ctx, userCommand, param, cmdDef, replyOptions, doc);
     } catch (e: any) {
       console.error("[Mirror Command processing error]", e);
+      try {
+        const errReplyOptions = {
+          parse_mode: "Markdown" as const,
+          reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
+        };
+        await ctx.reply(`❌ *ERROR HAPPENED*`, errReplyOptions).catch(() => {});
+      } catch (innerErr) {
+        try {
+          await ctx.reply(`❌ ERROR HAPPENED`).catch(() => {});
+        } catch (innerErr2) {}
+      }
     }
   });
 
