@@ -2,6 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, TerminalSquare, Users, MessageSquareShare, Settings, Layers, LogOut, Gift, ShoppingCart, Receipt, Bot, Heart } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import axios from 'axios';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -25,8 +26,13 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    localStorage.removeItem('adminKey');
+  const handleLogout = async () => {
+    try {
+      await axios.post('/api/admin/logout');
+    } catch (err) {
+      console.error("Logout request error", err);
+    }
+    localStorage.removeItem('admin_logged_in');
     navigate('/suwmwiuwnwkw');
   };
 

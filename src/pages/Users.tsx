@@ -5,26 +5,43 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 
 export function Users() {
   const [users, setUsers] = useState<any[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalUsers, setTotalUsers] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [editingCreditsUser, setEditingCreditsUser] = useState<any>(null);
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { loadUsers(currentPage); }, [currentPage]);
 
-  const loadUsers = () => axios.get('/api/users').then(res => setUsers(res.data));
+  const loadUsers = (page: number) => {
+    axios.get(`/api/users?page=${page}&limit=50`).then(res => {
+      if (res.data.users) {
+        setUsers(res.data.users);
+        setTotalPages(res.data.pages || 1);
+        setTotalUsers(res.data.total || 0);
+        setCurrentPage(res.data.page || 1);
+      } else {
+        setUsers(res.data);
+        setTotalPages(1);
+        setTotalUsers(res.data.length);
+        setCurrentPage(1);
+      }
+    });
+  };
 
   const toggleBan = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isBanned: !current });
-    loadUsers();
+    loadUsers(currentPage);
   };
 
   const toggleAdmin = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isAdmin: !current });
-    loadUsers();
+    loadUsers(currentPage);
   };
   
   const togglePremium = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isPremium: !current });
-    loadUsers();
+    loadUsers(currentPage);
   };
 
   const filteredUsers = users.filter(u => 
@@ -112,13 +129,38 @@ export function Users() {
             </tbody>
           </table>
         </div>
+        
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between bg-gray-50/50">
+          <div className="text-xs text-gray-500">
+            Showing Page <strong>{currentPage}</strong> of <strong>{totalPages}</strong> (<strong>{totalUsers}</strong> total users)
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 border border-gray-300 rounded text-xs font-medium bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Previous
+            </button>
+            <span className="text-xs font-semibold text-gray-700">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 border border-gray-300 rounded text-xs font-medium bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
       
       {editingCreditsUser && (
         <UserCreditsModal 
           user={editingCreditsUser} 
           onClose={() => setEditingCreditsUser(null)} 
-          onSave={loadUsers} 
+          onSave={() => loadUsers(currentPage)} 
         />
       )}
     </div>

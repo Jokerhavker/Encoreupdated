@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import axios from 'axios';
 import { Telegraf } from 'telegraf';
+import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { connectDB, Command, BotUser, BotGroup, Setting, Statlog, UsedTransaction, BroadcastHistory, Coupon, MirrorBot, MirrorWallet, MirrorWithdrawalRequest, Donation, setCachedAppUrl, getCachedAppUrl } from './db.js';
 import { getBot, setupWebhook } from './bot.js';
 import { 
@@ -19,6 +21,185 @@ import {
 } from './mirrorBotManager.js';
 
 export const apiRouter = express.Router();
+
+// Global validation helper for Telegram initData
+function validateTelegramInitData(initData: string, botToken: string): boolean {
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    params.delete("hash");
+
+    const dataCheckString = Array.from(params.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n");
+
+    const secretKey = crypto
+      .createHmac("sha256", "WebAppData")
+      .update(botToken)
+      .digest();
+
+    const computedHash = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    return computedHash === hash;
+  } catch (err) {
+    console.error("Error validating Telegram init data:", err);
+    return false;
+  }
+}
+
+// Authentication Middlewares
+export const requireAdminAuth = (req: any, res: any, next: any) => {
+  const token = req.cookies?.admin_token;
+
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized — login required" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-jwt-secret-key-64-chars') as any;
+    if (decoded.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid or expired session" });
+  }
+};
+
+export const requireUserAuth = async (req: any, res: any, next: any) => {
+  const telegramId = req.headers["x-telegram-id"] || req.query.telegramId || req.body.telegramId || req.body.ownerTelegramId || req.query.ownerTelegramId;
+  const initData   = req.headers["x-telegram-init-data"];
+
+  if (!telegramId) {
+    return res.status(401).json({ error: "Unauthorized: Missing Telegram ID" });
+  }
+
+  const isDevOrPreview = process.env.NODE_ENV !== "production" || 
+                         !process.env.TELEGRAM_BOT_TOKEN ||
+                         (req.headers.origin && (
+                           req.headers.origin.includes("localhost") || 
+                           req.headers.origin.includes("ais-dev-") || 
+                           req.headers.origin.includes("ais-pre-") || 
+                           req.headers.origin.includes("run.app")
+                         ));
+
+  if (initData) {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (botToken) {
+      const isValid = validateTelegramInitData(initData as string, botToken);
+      if (!isValid && !isDevOrPreview) {
+        return res.status(401).json({ error: "Invalid Telegram auth" });
+      }
+    }
+  } else if (!isDevOrPreview) {
+    return res.status(401).json({ error: "Unauthorized: Missing Telegram initialization data" });
+  }
+
+  req.telegramId = String(telegramId);
+  next();
+};
+
+export const requireAnyAuth = (req: any, res: any, next: any) => {
+  // Try admin auth first
+  const adminToken = req.cookies?.admin_token;
+  if (adminToken) {
+    try {
+      const decoded = jwt.verify(adminToken, process.env.JWT_SECRET || 'fallback-jwt-secret-key-64-chars') as any;
+      if (decoded.role === "admin") {
+        req.admin = decoded;
+        return next();
+      }
+    } catch (e) {}
+  }
+
+  // Try user auth next
+  const telegramId = req.headers["x-telegram-id"] || req.query.telegramId || req.body.telegramId || req.body.ownerTelegramId || req.query.ownerTelegramId;
+  const initData   = req.headers["x-telegram-init-data"];
+
+  if (telegramId) {
+    const isDevOrPreview = process.env.NODE_ENV !== "production" || 
+                           !process.env.TELEGRAM_BOT_TOKEN ||
+                           (req.headers.origin && (
+                             req.headers.origin.includes("localhost") || 
+                             req.headers.origin.includes("ais-dev-") || 
+                             req.headers.origin.includes("ais-pre-") || 
+                             req.headers.origin.includes("run.app")
+                           ));
+
+    if (initData) {
+      const botToken = process.env.TELEGRAM_BOT_TOKEN;
+      if (botToken) {
+        const isValid = validateTelegramInitData(initData as string, botToken);
+        if (!isValid && !isDevOrPreview) {
+          return res.status(401).json({ error: "Invalid Telegram auth" });
+        }
+      }
+    } else if (!isDevOrPreview) {
+      return res.status(401).json({ error: "Unauthorized: Missing Telegram initialization data" });
+    }
+
+    req.telegramId = String(telegramId);
+    return next();
+  }
+
+  return res.status(401).json({ error: "Unauthorized" });
+};
+
+// Rate limiters
+export const loginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,   // 15 minute window
+  max: 10,                    // 10 attempts per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    blocked: true,
+    message: "Too many login attempts. Try again in 15 minutes."
+  },
+  skipSuccessfulRequests: true,
+});
+
+export const apiRateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,   // 1 minute
+  max: 200,                   // 200 requests per minute per IP
+});
+
+// Helper middleware for user-owned mirror bots
+export const requireMirrorBotOwner = async (req: any, res: any, next: any) => {
+  const token = req.body.token || req.query.token;
+  if (!token) {
+    return res.status(400).json({ error: 'Missing bot token' });
+  }
+  
+  try {
+    let botDoc = null;
+    // Check if the token is actually an ObjectId string
+    if (mongoose.Types.ObjectId.isValid(token)) {
+      botDoc = await MirrorBot.findById(token);
+    } else {
+      botDoc = await MirrorBot.findOne({ token });
+    }
+
+    if (!botDoc) {
+      return res.status(404).json({ error: 'Bot configuration not found.' });
+    }
+    
+    // Check owner matches req.telegramId
+    if (botDoc.ownerTelegramId !== req.telegramId) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this bot.' });
+    }
+    
+    req.mirrorBot = botDoc;
+    next();
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
 // Mirror Bot API endpoints
 
@@ -955,7 +1136,7 @@ apiRouter.get('/api/admin/check-ip', (req, res) => {
   res.json({ blocked: false });
 });
 
-apiRouter.post('/api/admin/login', (req, res) => {
+apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
   const { key } = req.body;
   const ip = getClientIp(req);
   const now = Date.now();
@@ -975,11 +1156,39 @@ apiRouter.post('/api/admin/login', (req, res) => {
     });
   }
 
-  // Check correct key (master key 'ARUSHNGGA9')
-  if (key === 'ARUSHNGGA9') {
+  const correctKey = process.env.ADMIN_SECRET_KEY || 'ARUSHNGGA9';
+  if (!key || !correctKey) {
+    return res.status(400).json({ success: false, message: 'Bad request' });
+  }
+
+  const keyBuffer = Buffer.from(key);
+  const correctBuffer = Buffer.from(correctKey);
+
+  let match = false;
+  if (keyBuffer.length === correctBuffer.length) {
+    match = crypto.timingSafeEqual(keyBuffer, correctBuffer);
+  }
+
+  if (match) {
     // Reset attempts on successful login
     status.attempts = 0;
     status.blockedUntil = 0;
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { role: 'admin', iat: Date.now() },
+      process.env.JWT_SECRET || 'fallback-jwt-secret-key-64-chars',
+      { expiresIn: '8h' }
+    );
+
+    // Set cookie
+    res.cookie('admin_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 8 * 60 * 60 * 1000 // 8 hours
+    });
+
     return res.json({ success: true });
   } else {
     status.attempts += 1;
@@ -1009,7 +1218,16 @@ apiRouter.post('/api/admin/login', (req, res) => {
   }
 });
 
-apiRouter.post('/api/telegram/manual-setup', async (req, res) => {
+apiRouter.post('/api/admin/logout', (req, res) => {
+  res.clearCookie('admin_token', {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none'
+  });
+  res.json({ success: true });
+});
+
+apiRouter.post('/api/telegram/manual-setup', requireAdminAuth, async (req, res) => {
   let targetUrl = req.body.url || process.env.APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL;
   if (!targetUrl) {
     targetUrl = req.protocol + '://' + req.get('host');
@@ -1018,7 +1236,7 @@ apiRouter.post('/api/telegram/manual-setup', async (req, res) => {
   res.json(result);
 });
 
-apiRouter.get('/api/stats/dashboard', async (req, res) => {
+apiRouter.get('/api/stats/dashboard', requireAdminAuth, async (req, res) => {
   const totalUsers = await BotUser.countDocuments();
   const totalGroups = await BotGroup.countDocuments();
   const totalCommands = await Command.countDocuments();
@@ -1034,12 +1252,12 @@ apiRouter.get('/api/stats/dashboard', async (req, res) => {
   res.json({ totalUsers, totalGroups, totalGroupMembers, totalCommands, totalCalls, recentCommands });
 });
 
-apiRouter.get('/api/commands', async (req, res) => {
+apiRouter.get('/api/commands', requireAnyAuth, async (req, res) => {
   const commands = await Command.find().sort({ createdAt: -1 });
   res.json(commands);
 });
 
-apiRouter.post('/api/commands', async (req, res) => {
+apiRouter.post('/api/commands', requireAdminAuth, async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
       return res.status(500).json({ error: 'Database not connected. Please set MONGODB_URI in secrets.' });
@@ -1057,17 +1275,35 @@ apiRouter.post('/api/commands', async (req, res) => {
   }
 });
 
-apiRouter.delete('/api/commands/:id', async (req, res) => {
+apiRouter.delete('/api/commands/:id', requireAdminAuth, async (req, res) => {
   await Command.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
 
-apiRouter.get('/api/users', async (req, res) => {
-  const users = await BotUser.find().sort({ interactions: -1 });
-  res.json(users);
+apiRouter.get('/api/users', requireAdminAuth, async (req, res) => {
+  try {
+    const page  = req.query.page ? parseInt(req.query.page as string) : null;
+    if (page) {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const skip  = (page - 1) * limit;
+
+      const [users, total] = await Promise.all([
+        BotUser.find({}).sort({ interactions: -1 }).skip(skip).limit(limit).lean(),
+        BotUser.countDocuments(),
+      ]);
+
+      return res.json({ users, total, page, pages: Math.ceil(total / limit) });
+    } else {
+      // Return first 200 users for backward compatibility with frontend
+      const users = await BotUser.find({}).sort({ interactions: -1 }).limit(200).lean();
+      return res.json(users);
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-apiRouter.get('/api/transactions', async (req, res) => {
+apiRouter.get('/api/transactions', requireAdminAuth, async (req, res) => {
   try {
     const transactions = await BotUser.aggregate([
       { $unwind: "$purchaseHistory" },
@@ -1096,7 +1332,7 @@ apiRouter.get('/api/transactions', async (req, res) => {
 });
 
 // Delete target transaction record from user account purchase logs and used transaction list
-apiRouter.delete('/api/transactions/:id', async (req, res) => {
+apiRouter.delete('/api/transactions/:id', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     if (!id) {
@@ -1141,8 +1377,12 @@ apiRouter.delete('/api/transactions/:id', async (req, res) => {
   }
 });
 
-apiRouter.get('/api/users/telegram/:telegramId', async (req, res) => {
+apiRouter.get('/api/users/telegram/:telegramId', requireAnyAuth, async (req: any, res) => {
   try {
+    if (!req.admin && req.telegramId !== req.params.telegramId) {
+      return res.status(403).json({ error: "Forbidden: You cannot access another user's profile." });
+    }
+
     let user = await BotUser.findOne({ telegramId: req.params.telegramId });
     if (!user) {
       user = new BotUser({
@@ -1160,8 +1400,12 @@ apiRouter.get('/api/users/telegram/:telegramId', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/users/telegram/:telegramId/reward-ad', async (req, res) => {
+apiRouter.post('/api/users/telegram/:telegramId/reward-ad', requireUserAuth, async (req: any, res) => {
   try {
+    if (req.telegramId !== req.params.telegramId) {
+      return res.status(403).json({ error: "Forbidden: You cannot earn ad rewards for another user." });
+    }
+
     const { provider } = req.body;
     
     if (provider !== 'Monetag') {
@@ -1201,9 +1445,12 @@ apiRouter.post('/api/users/telegram/:telegramId/reward-ad', async (req, res) => 
   }
 });
 
-
-apiRouter.post('/api/users/telegram/:telegramId/exchange-coins-to-credits', async (req, res) => {
+apiRouter.post('/api/users/telegram/:telegramId/exchange-coins-to-credits', requireUserAuth, async (req: any, res) => {
     try {
+        if (req.telegramId !== req.params.telegramId) {
+          return res.status(403).json({ error: "Forbidden: You cannot perform exchanges for another user." });
+        }
+
         const user = await BotUser.findOne({ telegramId: req.params.telegramId });
         if (!user) return res.status(404).json({ error: 'User not found' });
         
@@ -1229,13 +1476,17 @@ apiRouter.post('/api/users/telegram/:telegramId/exchange-coins-to-credits', asyn
     }
 });
 
-apiRouter.get('/api/redeem-store', async (req, res) => {
+apiRouter.get('/api/redeem-store', requireAnyAuth, async (req, res) => {
     const setting = await Setting.findOne({ key: 'redeemStore' });
     res.json(setting ? setting.value : []);
 });
 
-apiRouter.post('/api/users/telegram/:telegramId/redeem', async (req, res) => {
+apiRouter.post('/api/users/telegram/:telegramId/redeem', requireUserAuth, async (req: any, res) => {
     try {
+        if (req.telegramId !== req.params.telegramId) {
+          return res.status(403).json({ error: "Forbidden: You cannot perform redeem operations for another user." });
+        }
+
         const { command, credits } = req.body;
         const user = await BotUser.findOne({ telegramId: req.params.telegramId });
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1264,27 +1515,27 @@ apiRouter.post('/api/users/telegram/:telegramId/redeem', async (req, res) => {
     }
 });
 
-apiRouter.put('/api/users/:id', async (req, res) => {
+apiRouter.put('/api/users/:id', requireAdminAuth, async (req, res) => {
   const u = await BotUser.findByIdAndUpdate(req.params.id, req.body, {new: true});
   res.json(u);
 });
 
-apiRouter.get('/api/groups', async (req, res) => {
+apiRouter.get('/api/groups', requireAdminAuth, async (req, res) => {
   const groups = await BotGroup.find().sort({ interactions: -1 });
   res.json(groups);
 });
 
-apiRouter.put('/api/groups/:id', async (req, res) => {
+apiRouter.put('/api/groups/:id', requireAdminAuth, async (req, res) => {
   const g = await BotGroup.findByIdAndUpdate(req.params.id, req.body, {new: true});
   res.json(g);
 });
 
-apiRouter.get('/api/settings', async (req, res) => {
+apiRouter.get('/api/settings', requireAdminAuth, async (req, res) => {
   const settings = await Setting.find({});
   res.json(settings);
 });
 
-apiRouter.post('/api/settings', async (req, res) => {
+apiRouter.post('/api/settings', requireAdminAuth, async (req, res) => {
   const { settings } = req.body;
   for (const s of settings) {
     await Setting.findOneAndUpdate({ key: s.key }, { value: s.value }, { upsert: true });
@@ -1413,28 +1664,37 @@ apiRouter.get('/api/bot-maintenance-status', async (req, res) => {
 });
 
 // Donation Endpoints
-apiRouter.get('/api/donations/config', async (req, res) => {
+apiRouter.get('/api/donations/config', requireAnyAuth, async (req, res) => {
   try {
     const configSetting = await Setting.findOne({ key: 'donationSystemConfig' });
     const defaultConfig = {
-      payeeUpi: 'alkhkumar@fam',
+      payeeUpi: process.env.PAYEE_UPI || 'alkhkumar@fam',
       cryptoCurrencyName: 'USDT (TRC-20)',
-      cryptoWalletAddress: '',
+      cryptoWalletAddress: process.env.CRYPTO_WALLET || '',
       showCrypto: false
     };
-    res.json(configSetting?.value || defaultConfig);
+    
+    const value = configSetting?.value || {};
+    const config = {
+      payeeUpi: process.env.PAYEE_UPI || value.payeeUpi || defaultConfig.payeeUpi,
+      cryptoCurrencyName: value.cryptoCurrencyName || defaultConfig.cryptoCurrencyName,
+      cryptoWalletAddress: process.env.CRYPTO_WALLET || value.cryptoWalletAddress || defaultConfig.cryptoWalletAddress,
+      showCrypto: value.showCrypto !== undefined ? value.showCrypto : defaultConfig.showCrypto
+    };
+
+    res.json(config);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-apiRouter.post('/api/donations/config', async (req, res) => {
+apiRouter.post('/api/donations/config', requireAdminAuth, async (req, res) => {
   try {
     const { payeeUpi, cryptoCurrencyName, cryptoWalletAddress, showCrypto } = req.body;
     const config = {
-      payeeUpi: payeeUpi || 'alkhkumar@fam',
+      payeeUpi: payeeUpi || process.env.PAYEE_UPI || 'alkhkumar@fam',
       cryptoCurrencyName: cryptoCurrencyName || 'USDT (TRC-20)',
-      cryptoWalletAddress: cryptoWalletAddress || '',
+      cryptoWalletAddress: cryptoWalletAddress || process.env.CRYPTO_WALLET || '',
       showCrypto: !!showCrypto
     };
 
@@ -1450,7 +1710,7 @@ apiRouter.post('/api/donations/config', async (req, res) => {
   }
 });
 
-apiRouter.get('/api/donations', async (req, res) => {
+apiRouter.get('/api/donations', requireAdminAuth, async (req, res) => {
   try {
     const donations = await Donation.find().sort({ createdAt: -1 });
     res.json(donations);
@@ -1459,7 +1719,7 @@ apiRouter.get('/api/donations', async (req, res) => {
   }
 });
 
-apiRouter.delete('/api/donations/:id', async (req, res) => {
+apiRouter.delete('/api/donations/:id', requireAdminAuth, async (req, res) => {
   try {
     const donation = await Donation.findById(req.params.id);
     if (!donation) {
@@ -1486,7 +1746,7 @@ apiRouter.delete('/api/donations/:id', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/donations/send-message', async (req, res) => {
+apiRouter.post('/api/donations/send-message', requireAdminAuth, async (req, res) => {
   try {
     const bot = getBot();
     if (!bot) {
@@ -1695,7 +1955,7 @@ apiRouter.post('/api/donations/submit-crypto', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/donations/moderate', async (req, res) => {
+apiRouter.post('/api/donations/moderate', requireAdminAuth, async (req, res) => {
   try {
     const { donationId, action } = req.body; // action: 'Approve' or 'Reject'
     if (!donationId || !action) {
@@ -1738,7 +1998,7 @@ apiRouter.post('/api/donations/moderate', async (req, res) => {
   }
 });
 
-apiRouter.get('/api/broadcast', async (req, res) => {
+apiRouter.get('/api/broadcast', requireAdminAuth, async (req, res) => {
   try {
     const history = await BroadcastHistory.find().sort({ createdAt: -1 }).limit(50);
     res.json(history);
@@ -1747,7 +2007,7 @@ apiRouter.get('/api/broadcast', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/broadcast', async (req, res) => {
+apiRouter.post('/api/broadcast', requireAdminAuth, async (req, res) => {
   const { target, message, button, isGlobal } = req.body;
   const bot = getBot();
   if (!bot) return res.status(500).json({ error: 'Main bot is not initialized' });
@@ -1784,7 +2044,7 @@ apiRouter.post('/api/broadcast', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/broadcast/cancel', async (req, res) => {
+apiRouter.post('/api/broadcast/cancel', requireAdminAuth, async (req, res) => {
   const { id } = req.body;
   if (!id) {
     return res.status(400).json({ error: 'No broadcast ID provided' });
@@ -2283,7 +2543,7 @@ apiRouter.post('/api/subscription-tiers', async (req, res) => {
 });
 
 // Coupon Code Admin endpoints
-apiRouter.get('/api/coupons', async (req, res) => {
+apiRouter.get('/api/coupons', requireAdminAuth, async (req, res) => {
   try {
     const coupons = await Coupon.find().sort({ createdAt: -1 });
     res.json(coupons);
@@ -2292,7 +2552,7 @@ apiRouter.get('/api/coupons', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/coupons', async (req, res) => {
+apiRouter.post('/api/coupons', requireAdminAuth, async (req, res) => {
   try {
     const { code, discountPercent, tierId, maxUses, isActive } = req.body;
     if (!code || discountPercent === undefined || !tierId || maxUses === undefined) {
@@ -2312,7 +2572,7 @@ apiRouter.post('/api/coupons', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/coupons/delete', async (req, res) => {
+apiRouter.post('/api/coupons/delete', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.body;
     await Coupon.findByIdAndDelete(id);
@@ -2323,7 +2583,7 @@ apiRouter.post('/api/coupons/delete', async (req, res) => {
 });
 
 // Public validation endpoint for users checking out
-apiRouter.post('/api/shop/validate-coupon', async (req, res) => {
+apiRouter.post('/api/shop/validate-coupon', requireUserAuth, async (req, res) => {
   try {
     const { code, productId } = req.body;
     if (!code || !productId) {
@@ -2641,9 +2901,17 @@ apiRouter.post('/api/shop/verify-payment', async (req, res) => {
   }
 });
 
+// Helper to lookup mirror bots by token or ID (for masked admin operations)
+async function findMirrorBotByTokenOrId(token: string) {
+  if (mongoose.Types.ObjectId.isValid(token)) {
+    return await MirrorBot.findById(token);
+  }
+  return await MirrorBot.findOne({ token });
+}
+
 // --- MASTER ADMIN MIRROR BOTS ENDPOINTS ---
 
-apiRouter.get('/api/admin/mirror-bots', async (req, res) => {
+apiRouter.get('/api/admin/mirror-bots', requireAdminAuth, async (req, res) => {
   try {
     const bots = await MirrorBot.find({}).sort({ createdAt: -1 });
     const botsWithStats = await Promise.all(bots.map(async (bot) => {
@@ -2653,8 +2921,13 @@ apiRouter.get('/api/admin/mirror-bots', async (req, res) => {
         totalUsers = await BotUser.countDocuments({ interactedBots: bot.botUsername });
         totalGroups = await BotGroup.countDocuments({ interactedBots: bot.botUsername });
       }
+      
+      const botObj = bot.toObject();
+      // Mask token by replacing it with its _id
+      botObj.token = String(botObj._id);
+
       return {
-        ...bot.toObject(),
+        ...botObj,
         stats: { totalUsers, totalGroups }
       };
     }));
@@ -2682,12 +2955,22 @@ apiRouter.get('/api/admin/mirror-bots', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/admin/mirror-bots/update', async (req, res) => {
+apiRouter.get('/api/admin/mirror-bots/:id/token', requireAdminAuth, async (req, res) => {
+  try {
+    const bot = await MirrorBot.findById(req.params.id);
+    if (!bot) return res.status(404).json({ error: 'Bot not found' });
+    res.json({ token: bot.token });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/api/admin/mirror-bots/update', requireAdminAuth, async (req, res) => {
   try {
     const { token, plan, isActive, expiresAt, customBotName, defaultGroupCredits, ownerTelegramId } = req.body;
     if (!token) return res.status(400).json({ error: 'Missing token parameter' });
 
-    const botDoc = await MirrorBot.findOne({ token });
+    const botDoc = await findMirrorBotByTokenOrId(token);
     if (!botDoc) return res.status(404).json({ error: 'Mirror Bot entry not found' });
 
     if (plan !== undefined) botDoc.plan = plan;
@@ -2702,7 +2985,7 @@ apiRouter.post('/api/admin/mirror-bots/update', async (req, res) => {
     await botDoc.save();
 
     // Restart the bot poller to pick up new configurations and limits
-    stopMirrorBot(token);
+    stopMirrorBot(botDoc.token);
     if (botDoc.isActive) {
       await startMirrorBot(botDoc).catch((e: any) => console.error("Error launching mirror bot poller upon admin edit:", e));
     }
@@ -2713,15 +2996,15 @@ apiRouter.post('/api/admin/mirror-bots/update', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/admin/mirror-bots/delete', async (req, res) => {
+apiRouter.post('/api/admin/mirror-bots/delete', requireAdminAuth, async (req, res) => {
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: 'Missing token' });
 
-    const botDoc = await MirrorBot.findOne({ token });
+    const botDoc = await findMirrorBotByTokenOrId(token);
     if (botDoc) {
-      stopMirrorBot(token);
-      await MirrorBot.deleteOne({ token });
+      stopMirrorBot(botDoc.token);
+      await MirrorBot.deleteOne({ _id: botDoc._id });
     }
 
     res.json({ success: true, message: 'Mirrored bot was deleted and poller stopped completely.' });
@@ -2730,7 +3013,7 @@ apiRouter.post('/api/admin/mirror-bots/delete', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/admin/mirror-bots/tier-config', async (req, res) => {
+apiRouter.post('/api/admin/mirror-bots/tier-config', requireAdminAuth, async (req, res) => {
   try {
     const { tierConfig } = req.body;
     if (!tierConfig || !Array.isArray(tierConfig)) {
@@ -2919,11 +3202,15 @@ apiRouter.post('/api/mirror-bots/withdrawal-requests/:id/action', async (req, re
 // MASS API RUNNER ENDPOINTS
 // ==========================================
 
-apiRouter.get('/api/mass-run/profile', async (req, res) => {
+apiRouter.get('/api/mass-run/profile', requireUserAuth, async (req: any, res) => {
   try {
     const { telegramId } = req.query;
     if (!telegramId) {
       return res.status(400).json({ error: 'Telegram User ID is required.' });
+    }
+
+    if (req.telegramId !== String(telegramId)) {
+      return res.status(403).json({ error: "Forbidden: You cannot access another user's profile." });
     }
 
     const user = await BotUser.findOne({ telegramId: String(telegramId) });
@@ -3005,11 +3292,15 @@ apiRouter.get('/api/mass-run/profile', async (req, res) => {
   }
 });
 
-apiRouter.post('/api/mass-run/execute', async (req, res) => {
+apiRouter.post('/api/mass-run/execute', requireUserAuth, async (req: any, res) => {
   try {
     const { telegramId, command, parameters } = req.body;
     if (!telegramId || !command || !Array.isArray(parameters)) {
       return res.status(400).json({ error: 'Missing process parameters (telegramId, command, parameters).' });
+    }
+
+    if (req.telegramId !== String(telegramId)) {
+      return res.status(403).json({ error: "Forbidden: You cannot execute commands for another user." });
     }
 
     // 1. Check User
@@ -3209,11 +3500,15 @@ apiRouter.post('/api/mass-run/execute', async (req, res) => {
   }
 });
 
-apiRouter.get('/api/mass-run/history', async (req, res) => {
+apiRouter.get('/api/mass-run/history', requireUserAuth, async (req: any, res) => {
   try {
     const { telegramId } = req.query;
     if (!telegramId) {
       return res.status(400).json({ error: 'Telegram User ID is required.' });
+    }
+
+    if (req.telegramId !== String(telegramId)) {
+      return res.status(403).json({ error: "Forbidden: You cannot view another user's query history." });
     }
 
     const historyLogs = await Statlog.find({ telegramId: String(telegramId) })

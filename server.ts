@@ -4,10 +4,12 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
+import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 
 import { connectDB } from './server/db.js';
 import { getBot, initializeBot } from './server/bot.js';
-import { apiRouter } from './server/api.js';
+import { apiRouter, apiRateLimiter } from './server/api.js';
 import { initializeAllMirrorBots, handleMirrorBotWebhook } from './server/mirrorBotManager.js';
 
 async function startServer() {
@@ -18,8 +20,60 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(cors());
+  // Security headers with Helmet
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc:  ["'self'", "https:"],
+        scriptSrc:   ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://telegram.org", "https://pagead2.googlesyndication.com"],
+        styleSrc:    ["'self'", "'unsafe-inline'"],
+        imgSrc:      ["'self'", "data:", "https:"],
+        connectSrc:  ["'self'", "https:", "wss:", "http:", "ws:"],
+        frameSrc:    ["'self'", "https:", "http:"],
+      }
+    },
+    hsts:                  { maxAge: 63072000, includeSubDomains: true },
+    frameguard:            false, // Required false to let the app run within the AI Studio preview iframe!
+    referrerPolicy:        { policy: "strict-origin-when-cross-origin" },
+    xContentTypeOptions:   true,
+    xPoweredBy:            false,    // Hide X-Powered-By header
+  }));
+
+  // CORS configuration allowing production domains, local development, and dynamic AI Studio preview domains
+  const allowedOrigins = [
+    "https://69childreninmybasement.vercel.app",
+    "https://your-actual-domain.com"
+  ];
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const isAllowed = allowedOrigins.includes(origin) || 
+                        origin.includes("localhost") || 
+                        origin.includes("127.0.0.1") || 
+                        origin.includes("ais-dev-") || 
+                        origin.includes("ais-pre-") || 
+                        origin.includes("run.app");
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-telegram-id", "x-telegram-init-data"],
+  }));
+
+  app.use(cookieParser());
   app.use(express.json());
+
+  // Global rate limiter on all API routes except telegram webhook endpoints
+  app.use('/api', (req, res, next) => {
+    if (req.path.startsWith('/telegram/webhook')) {
+      return next();
+    }
+    return apiRateLimiter(req, res, next);
+  });
 
   // Webhook for Telegram
   const bot = getBot();

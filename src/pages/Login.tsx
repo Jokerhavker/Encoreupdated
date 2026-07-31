@@ -32,7 +32,7 @@ export function Login() {
     try {
       const response = await axios.post('/api/admin/login', { key });
       if (response.data.success) {
-        localStorage.setItem('adminKey', 'ARUSHNGGA9');
+        localStorage.setItem('admin_logged_in', 'true');
         navigate('/');
       }
     } catch (err: any) {
