@@ -1129,10 +1129,46 @@ interface AdminOtpData {
   lastRequestedAt: number;
 }
 
-let activeAdminOtp: AdminOtpData | null = null;
+let activeAdminOtpCache: AdminOtpData | null = null;
 const ADMIN_TELEGRAM_IDS = ['8033206631', '8241699347'];
 const OTP_VALID_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_RESEND_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getStoredAdminOtp(): Promise<AdminOtpData | null> {
+  if (activeAdminOtpCache && activeAdminOtpCache.expiresAt > Date.now()) {
+    return activeAdminOtpCache;
+  }
+  try {
+    const doc = await Setting.findOne({ key: 'active_admin_otp' });
+    if (doc && doc.value) {
+      const data = typeof doc.value === 'string' ? JSON.parse(doc.value) : doc.value;
+      if (data && data.code && data.expiresAt) {
+        activeAdminOtpCache = data;
+        return data;
+      }
+    }
+  } catch (e) {
+    console.error("Error fetching admin OTP from database:", e);
+  }
+  return activeAdminOtpCache;
+}
+
+async function saveAdminOtp(otpData: AdminOtpData | null): Promise<void> {
+  activeAdminOtpCache = otpData;
+  try {
+    if (otpData) {
+      await Setting.findOneAndUpdate(
+        { key: 'active_admin_otp' },
+        { value: otpData },
+        { upsert: true }
+      );
+    } else {
+      await Setting.deleteOne({ key: 'active_admin_otp' });
+    }
+  } catch (e) {
+    console.error("Error saving admin OTP to database:", e);
+  }
+}
 
 apiRouter.get('/api/admin/check-ip', (req, res) => {
   const ip = getClientIp(req);
@@ -1148,9 +1184,11 @@ apiRouter.get('/api/admin/check-ip', (req, res) => {
   res.json({ blocked: false });
 });
 
-apiRouter.get('/api/admin/otp-status', (req, res) => {
+apiRouter.get('/api/admin/otp-status', async (req, res) => {
   const now = Date.now();
-  if (!activeAdminOtp) {
+  const currentOtp = await getStoredAdminOtp();
+
+  if (!currentOtp) {
     return res.json({
       hasActiveOtp: false,
       cooldownInSeconds: 0,
@@ -1158,9 +1196,9 @@ apiRouter.get('/api/admin/otp-status', (req, res) => {
     });
   }
 
-  const cooldownLeft = Math.max(0, Math.ceil((activeAdminOtp.lastRequestedAt + OTP_RESEND_COOLDOWN_MS - now) / 1000));
-  const expiresLeft = Math.max(0, Math.ceil((activeAdminOtp.expiresAt - now) / 1000));
-  const isValid = now < activeAdminOtp.expiresAt;
+  const cooldownLeft = Math.max(0, Math.ceil((currentOtp.lastRequestedAt + OTP_RESEND_COOLDOWN_MS - now) / 1000));
+  const expiresLeft = Math.max(0, Math.ceil((currentOtp.expiresAt - now) / 1000));
+  const isValid = now < currentOtp.expiresAt;
 
   res.json({
     hasActiveOtp: isValid,
@@ -1182,9 +1220,11 @@ apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
     });
   }
 
+  const currentOtp = await getStoredAdminOtp();
+
   // Check 5-minute resend cooldown
-  if (activeAdminOtp && (now - activeAdminOtp.lastRequestedAt) < OTP_RESEND_COOLDOWN_MS) {
-    const remainingSec = Math.ceil((OTP_RESEND_COOLDOWN_MS - (now - activeAdminOtp.lastRequestedAt)) / 1000);
+  if (currentOtp && (now - currentOtp.lastRequestedAt) < OTP_RESEND_COOLDOWN_MS) {
+    const remainingSec = Math.ceil((OTP_RESEND_COOLDOWN_MS - (now - currentOtp.lastRequestedAt)) / 1000);
     const mins = Math.floor(remainingSec / 60);
     const secs = remainingSec % 60;
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -1200,15 +1240,21 @@ apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
   // Generate 6-digit random numeric OTP
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-  activeAdminOtp = {
+  const newOtpData: AdminOtpData = {
     code: otpCode,
     createdAt: now,
     expiresAt: now + OTP_VALID_DURATION_MS,
     lastRequestedAt: now
   };
 
+  await saveAdminOtp(newOtpData);
+
   // Send message via Telegram main bot to both admin user IDs
-  const bot = getBot();
+  let bot = getBot();
+  if (!bot) {
+    bot = (await import('./bot.js')).getBot();
+  }
+
   let sendSuccessCount = 0;
   let sendFailCount = 0;
   const sendErrors: string[] = [];
@@ -1237,6 +1283,8 @@ apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
     });
   }
 
+  console.log(`[Admin OTP Request] Sent OTP ${otpCode} to ${sendSuccessCount} admins. Valid until ${new Date(newOtpData.expiresAt).toISOString()}`);
+
   return res.json({
     success: true,
     message: `OTP successfully sent to Telegram admin accounts (${sendSuccessCount} delivered). Code is valid for 5 minutes.`,
@@ -1245,7 +1293,7 @@ apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
   });
 });
 
-apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
+apiRouter.post('/api/admin/login', loginRateLimiter, async (req, res) => {
   const { otp } = req.body;
   const ip = getClientIp(req);
   const now = Date.now();
@@ -1265,26 +1313,30 @@ apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
     });
   }
 
-  if (!otp || typeof otp !== 'string') {
+  if (!otp || (typeof otp !== 'string' && typeof otp !== 'number')) {
     return res.status(400).json({ success: false, message: 'Please enter the 6-digit OTP code.' });
   }
 
-  if (!activeAdminOtp || now > activeAdminOtp.expiresAt) {
+  const currentOtp = await getStoredAdminOtp();
+
+  if (!currentOtp || now > currentOtp.expiresAt) {
+    console.log(`[Admin Login Attempt] OTP missing or expired. Current OTP exists: ${!!currentOtp}, Now: ${now}, ExpiresAt: ${currentOtp?.expiresAt}`);
     return res.status(400).json({
       success: false,
       message: 'OTP has expired or is invalid. Please request a new OTP.'
     });
   }
 
-  const cleanInputOtp = otp.trim();
-  const match = crypto.timingSafeEqual(
-    Buffer.from(cleanInputOtp.padStart(6, ' ')),
-    Buffer.from(activeAdminOtp.code.padStart(6, ' '))
-  ) && cleanInputOtp.length === activeAdminOtp.code.length;
+  const cleanInputOtp = String(otp).trim().replace(/\D/g, '');
+  const cleanStoredOtp = String(currentOtp.code).trim().replace(/\D/g, '');
+
+  console.log(`[Admin Login Attempt] Input OTP: "${cleanInputOtp}", Stored OTP: "${cleanStoredOtp}"`);
+
+  const match = (cleanInputOtp === cleanStoredOtp) && cleanInputOtp.length === 6;
 
   if (match) {
-    // Invalidate active OTP so it cannot be reused
-    activeAdminOtp = null;
+    // Invalidate active OTP in memory and DB so it cannot be reused
+    await saveAdminOtp(null);
 
     // Reset attempts on successful login
     status.attempts = 0;
