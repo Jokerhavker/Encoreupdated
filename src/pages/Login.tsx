@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ShieldCheck, Send, RefreshCw, Lock, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Send, RefreshCw, Lock, AlertTriangle, CheckCircle2, User, UserCheck } from 'lucide-react';
 
 export function Login() {
+  const [selectedAdmin, setSelectedAdmin] = useState<'Ayush' | 'Arush'>('Ayush');
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
@@ -34,6 +35,9 @@ export function Login() {
         if (res.data.cooldownInSeconds > 0) {
           setCooldown(res.data.cooldownInSeconds);
         }
+        if (res.data.targetAdmin) {
+          setSelectedAdmin(res.data.targetAdmin);
+        }
       })
       .catch(err => {
         console.error("Error checking OTP status", err);
@@ -62,9 +66,9 @@ export function Login() {
     setIsSendingOtp(true);
 
     try {
-      const res = await axios.post('/api/admin/request-otp');
+      const res = await axios.post('/api/admin/request-otp', { adminName: selectedAdmin });
       if (res.data.success) {
-        setOtpSuccessMsg(res.data.message || 'OTP sent to Telegram admin accounts!');
+        setOtpSuccessMsg(res.data.message || `OTP sent to ${selectedAdmin} via Telegram!`);
         setCooldown(res.data.cooldownInSeconds || 300);
       }
     } catch (err: any) {
@@ -121,7 +125,7 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4 py-8">
       <div className="max-w-md w-full p-8 bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700">
         
         <div className="text-center mb-6">
@@ -129,11 +133,10 @@ export function Login() {
             <ShieldCheck className="h-8 w-8" />
           </div>
           <h2 className="text-2xl font-black text-gray-900 dark:text-white">
-            Admin OTP Verification
+            Admin Verification
           </h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            OTP is sent via Telegram to authorized admin IDs <br />
-            <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">8033206631</span> & <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">8241699347</span>
+            Select Admin to receive 6-digit OTP code on Telegram
           </p>
         </div>
 
@@ -144,7 +147,7 @@ export function Login() {
             </div>
             <h3 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Access Blocked</h3>
             <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed mb-6">
-              {blockedMessage || 'Your IP has been blocked due to too many incorrect attempts.'}
+              {blockedMessage || 'Your IP has been blocked due to invalid attempts or admin block request.'}
             </p>
             <div className="text-xs text-gray-500 bg-gray-100 dark:bg-gray-900 py-2 rounded-lg font-medium">
               Duration: 24-hour temporary IP lockout.
@@ -171,10 +174,49 @@ export function Login() {
               </div>
             )}
 
+            {/* Admin Selection Box */}
             <div className="mb-5 bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-2.5">
+                1. Select Admin
+              </label>
+              
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedAdmin('Ayush')}
+                  className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all cursor-pointer ${
+                    selectedAdmin === 'Ayush'
+                      ? 'border-blue-600 bg-blue-50/60 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-bold shadow-sm'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-sm mb-0.5">
+                    {selectedAdmin === 'Ayush' ? <UserCheck className="w-4 h-4 text-blue-600" /> : <User className="w-4 h-4" />}
+                    <span>Ayush</span>
+                  </div>
+                  <span className="text-[10px] font-mono opacity-75">8033206631</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedAdmin('Arush')}
+                  className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all cursor-pointer ${
+                    selectedAdmin === 'Arush'
+                      ? 'border-blue-600 bg-blue-50/60 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-bold shadow-sm'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-sm mb-0.5">
+                    {selectedAdmin === 'Arush' ? <UserCheck className="w-4 h-4 text-blue-600" /> : <User className="w-4 h-4" />}
+                    <span>Arush</span>
+                  </div>
+                  <span className="text-[10px] font-mono opacity-75">8241699347</span>
+                </button>
+              </div>
+
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
-                  Request Telegram OTP
+                <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+                  Target: <strong className="text-blue-600 dark:text-blue-400">{selectedAdmin}</strong>
                 </span>
                 {cooldown > 0 && (
                   <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded">
@@ -182,6 +224,7 @@ export function Login() {
                   </span>
                 )}
               </div>
+
               <button
                 type="button"
                 onClick={handleRequestOtp}
@@ -191,7 +234,7 @@ export function Login() {
                 {isSendingOtp ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    Sending OTP to Telegram...
+                    Sending OTP to {selectedAdmin}...
                   </>
                 ) : cooldown > 0 ? (
                   <>
@@ -201,7 +244,7 @@ export function Login() {
                 ) : (
                   <>
                     <Send className="w-4 h-4" />
-                    Send OTP via Main Bot
+                    Send OTP to {selectedAdmin}
                   </>
                 )}
               </button>
@@ -209,8 +252,8 @@ export function Login() {
 
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label htmlFor="otpCode" className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">
-                  Enter 6-Digit OTP Code
+                <label htmlFor="otpCode" className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wider">
+                  2. Enter 6-Digit OTP Code
                 </label>
                 <div className="relative">
                   <input

@@ -1127,12 +1127,35 @@ interface AdminOtpData {
   createdAt: number;
   expiresAt: number;
   lastRequestedAt: number;
+  requestIp: string;
+  targetAdmin: string;
+  targetTelegramId: string;
 }
 
 let activeAdminOtpCache: AdminOtpData | null = null;
-const ADMIN_TELEGRAM_IDS = ['8033206631', '8241699347'];
+const ADMIN_USERS: Record<string, string> = {
+  'Ayush': '8033206631',
+  'Arush': '8241699347'
+};
 const OTP_VALID_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_RESEND_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function handleBlockAdminLoginFromTelegram(otpCode?: string): Promise<{ success: boolean; blockedIp?: string }> {
+  const currentOtp = await getStoredAdminOtp();
+  let blockedIp = '';
+
+  if (currentOtp && currentOtp.requestIp) {
+    blockedIp = currentOtp.requestIp;
+    ipAttempts.set(blockedIp, {
+      attempts: 5,
+      blockedUntil: Date.now() + (24 * 60 * 60 * 1000) // Block for 24 hours
+    });
+    console.log(`[Admin OTP Block] IP ${blockedIp} has been locked for 24 hours via Telegram block request.`);
+  }
+
+  await saveAdminOtp(null);
+  return { success: true, blockedIp };
+}
 
 async function getStoredAdminOtp(): Promise<AdminOtpData | null> {
   if (activeAdminOtpCache && activeAdminOtpCache.expiresAt > Date.now()) {
@@ -1203,13 +1226,18 @@ apiRouter.get('/api/admin/otp-status', async (req, res) => {
   res.json({
     hasActiveOtp: isValid,
     cooldownInSeconds: cooldownLeft,
-    expiresInSeconds: expiresLeft
+    expiresInSeconds: expiresLeft,
+    targetAdmin: currentOtp.targetAdmin
   });
 });
 
 apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
   const ip = getClientIp(req);
   const now = Date.now();
+  const { adminName } = req.body;
+
+  const targetAdmin = (adminName === 'Arush') ? 'Arush' : 'Ayush';
+  const targetTelegramId = ADMIN_USERS[targetAdmin];
 
   let status = ipAttempts.get(ip);
   if (status && status.blockedUntil > now) {
@@ -1244,50 +1272,70 @@ apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
     code: otpCode,
     createdAt: now,
     expiresAt: now + OTP_VALID_DURATION_MS,
-    lastRequestedAt: now
+    lastRequestedAt: now,
+    requestIp: ip,
+    targetAdmin,
+    targetTelegramId
   };
 
   await saveAdminOtp(newOtpData);
 
-  // Send message via Telegram main bot to both admin user IDs
+  // Send message via Telegram main bot ONLY to the selected admin user ID
   let bot = getBot();
   if (!bot) {
     bot = (await import('./bot.js')).getBot();
   }
 
-  let sendSuccessCount = 0;
-  let sendFailCount = 0;
-  const sendErrors: string[] = [];
+  let sendSuccess = false;
+  let sendErrorMsg = '';
 
   if (bot && bot.telegram) {
-    const message = `🔐 *ADMIN LOGIN OTP*\n\nYour Admin Panel verification code is:\n\`${otpCode}\`\n\n⏰ *Valid for:* 5 minutes\n\n_If you did not request this login code, please secure your account immediately._`;
-    for (const adminId of ADMIN_TELEGRAM_IDS) {
-      try {
-        await bot.telegram.sendMessage(adminId, message, { parse_mode: 'Markdown' });
-        sendSuccessCount++;
-      } catch (err: any) {
-        console.error(`Failed to send OTP to Telegram admin ID ${adminId}:`, err.message);
-        sendFailCount++;
-        sendErrors.push(`Admin ${adminId}: ${err.message}`);
-      }
+    const message = `🔐 *ADMIN LOGIN OTP REQUEST*\n\n` +
+      `👤 *Target Admin:* ${targetAdmin}\n` +
+      `🌐 *Request IP:* \`${ip}\`\n\n` +
+      `Your verification code is:\n\`${otpCode}\`\n\n` +
+      `⏰ *Valid for:* 5 minutes\n\n` +
+      `⚠️ *If you are not trying to log in, click the button below to BLOCK this request!*`;
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          {
+            text: "🚫 BLOCK THIS LOGIN",
+            callback_data: `block_admin_login:${otpCode}`
+          }
+        ]
+      ]
+    };
+
+    try {
+      await bot.telegram.sendMessage(targetTelegramId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: replyMarkup
+      });
+      sendSuccess = true;
+    } catch (err: any) {
+      console.error(`Failed to send OTP to Telegram admin ${targetAdmin} (${targetTelegramId}):`, err.message);
+      sendErrorMsg = err.message;
     }
   } else {
-    sendErrors.push("Main Telegram bot instance is not running or initialized.");
+    sendErrorMsg = "Main Telegram bot instance is not running or initialized.";
   }
 
-  if (sendSuccessCount === 0) {
+  if (!sendSuccess) {
     return res.status(500).json({
       success: false,
-      message: `Failed to deliver OTP via Telegram. Details: ${sendErrors.join(', ')}`,
+      message: `Failed to deliver OTP via Telegram to ${targetAdmin} (${targetTelegramId}): ${sendErrorMsg}`,
       cooldownInSeconds: 300
     });
   }
 
-  console.log(`[Admin OTP Request] Sent OTP ${otpCode} to ${sendSuccessCount} admins. Valid until ${new Date(newOtpData.expiresAt).toISOString()}`);
+  console.log(`[Admin OTP Request] Sent OTP ${otpCode} specifically to ${targetAdmin} (${targetTelegramId}). Valid until ${new Date(newOtpData.expiresAt).toISOString()}`);
 
   return res.json({
     success: true,
-    message: `OTP successfully sent to Telegram admin accounts (${sendSuccessCount} delivered). Code is valid for 5 minutes.`,
+    message: `OTP successfully sent to ${targetAdmin} via Telegram! Code is valid for 5 minutes.`,
+    targetAdmin,
     cooldownInSeconds: 300,
     expiresInSeconds: 300
   });

@@ -1094,6 +1094,28 @@ export async function initializeBot() {
     return next();
   });
 
+  bot.action(/^block_admin_login:(.+)$/, async (ctx) => {
+    const otpCode = ctx.match ? ctx.match[1] : '';
+    try {
+      const { handleBlockAdminLoginFromTelegram } = await import("./api.js");
+      const res = await handleBlockAdminLoginFromTelegram(otpCode);
+
+      await ctx.answerCbQuery(
+        "🚨 LOGIN ATTEMPT BLOCKED!\nThe OTP has been invalidated and the requesting IP has been locked for 24 hours.",
+        { show_alert: true }
+      ).catch(() => {});
+
+      const blockedIpText = res.blockedIp ? `\n🌐 *Blocked IP:* \`${res.blockedIp}\`` : '';
+      await ctx.editMessageText(
+        `⛔ *LOGIN ATTEMPT BLOCKED BY ADMIN*\n\nThis admin login request has been **REJECTED AND BLOCKED** by Admin.${blockedIpText}\n\n• OTP code invalidated\n• Requesting IP address locked for 24 hours`,
+        { parse_mode: "Markdown" }
+      ).catch(() => {});
+    } catch (err: any) {
+      console.error("Error in block_admin_login callback handler:", err);
+      await ctx.answerCbQuery("Error processing block request.", { show_alert: true }).catch(() => {});
+    }
+  });
+
   bot.action("limit_info", async (ctx) => {
     return ctx
       .answerCbQuery(
