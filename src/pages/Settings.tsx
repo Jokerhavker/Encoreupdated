@@ -11,6 +11,7 @@ export function Settings() {
   const [botMaintenanceMode, setBotMaintenanceMode] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [webhookStatus, setWebhookStatus] = useState<{loading: boolean, result: any}>({ loading: false, result: null });
+  const [mirrorWebhookStatus, setMirrorWebhookStatus] = useState<{loading: boolean, result: any}>({ loading: false, result: null });
 
   useEffect(() => {
     axios.get('/api/settings').then(res => {
@@ -78,6 +79,16 @@ export function Settings() {
     }
   };
 
+  const triggerMirrorWebhookSetup = async () => {
+    setMirrorWebhookStatus({ loading: true, result: null });
+    try {
+      const res = await axios.post('/api/telegram/manual-setup-mirror', { url: window.location.origin });
+      setMirrorWebhookStatus({ loading: false, result: res.data });
+    } catch (e: any) {
+      setMirrorWebhookStatus({ loading: false, result: { success: false, error: e.message } });
+    }
+  };
+
   if (loading) return <div>Loading...</div>;
 
   return (
@@ -108,6 +119,55 @@ export function Settings() {
               <div>
                 <p className="font-medium">{webhookStatus.result.success ? 'Webhook Successfully Synced!' : 'Sync Failed'}</p>
                 <p className="text-xs mt-1 font-mono break-all">{webhookStatus.result.success ? webhookStatus.result.url : webhookStatus.result.error}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* MIRROR BOTS WEBHOOK SYNC */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-gray-700 flex items-center mb-2">
+            <Webhook className="w-4 h-4 mr-1.5 text-blue-600" /> Mirror Bots Webhook Sync
+          </h3>
+          <p className="text-xs text-gray-500 mb-4">
+            Synchronize and update the webhooks for all active clone/mirror bots in one click using the current deployed domain.
+          </p>
+
+          <button 
+            onClick={triggerMirrorWebhookSetup}
+            disabled={mirrorWebhookStatus.loading}
+            className="flex items-center text-sm font-medium bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition disabled:opacity-50"
+          >
+            {mirrorWebhookStatus.loading ? 'Syncing Mirror Bots...' : 'Sync Mirror Webhooks'}
+          </button>
+
+          {mirrorWebhookStatus.result && (
+            <div className={`mt-3 p-3 rounded-md text-sm border flex items-start ${mirrorWebhookStatus.result.success ? 'bg-blue-50 border-blue-200 text-blue-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+              {mirrorWebhookStatus.result.success ? <CheckCircle2 className="w-4 h-4 mt-0.5 mr-2 shrink-0 text-blue-600" /> : <XCircle className="w-4 h-4 mt-0.5 mr-2 shrink-0 text-red-600" />}
+              <div>
+                <p className="font-medium">
+                  {mirrorWebhookStatus.result.success 
+                    ? `Synced ${mirrorWebhookStatus.result.successCount} of ${mirrorWebhookStatus.result.totalBots} active bots` 
+                    : 'Sync Failed'}
+                </p>
+                {mirrorWebhookStatus.result.success && mirrorWebhookStatus.result.details && mirrorWebhookStatus.result.details.length > 0 && (
+                  <div className="mt-2 text-xs space-y-1 max-h-32 overflow-y-auto bg-white/50 p-2 rounded border border-blue-100">
+                    {mirrorWebhookStatus.result.details.map((d: any, idx: number) => (
+                      <div key={idx} className="flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5">
+                          <span className={d.success ? "text-emerald-600 font-bold" : "text-red-500 font-bold"}>
+                            {d.success ? '✓' : '✗'}
+                          </span>
+                          <span className="font-mono bg-white/70 px-1 rounded">@{d.username}</span>
+                        </div>
+                        {!d.success && <span className="text-red-500 text-[10px]">{d.error}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!mirrorWebhookStatus.result.success && (
+                  <p className="text-xs mt-1 font-mono break-all">{mirrorWebhookStatus.result.error}</p>
+                )}
               </div>
             </div>
           )}

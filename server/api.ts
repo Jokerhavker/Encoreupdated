@@ -1228,12 +1228,83 @@ apiRouter.post('/api/admin/logout', (req, res) => {
 });
 
 apiRouter.post('/api/telegram/manual-setup', requireAdminAuth, async (req, res) => {
-  let targetUrl = req.body.url || process.env.APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL;
-  if (!targetUrl) {
-    targetUrl = req.protocol + '://' + req.get('host');
+  try {
+    let targetUrl = req.body.url || process.env.APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    if (!targetUrl) {
+      targetUrl = req.protocol + '://' + req.get('host');
+    }
+
+    // Clean target url trailing slash
+    targetUrl = targetUrl.replace(/\/$/, "");
+    if (!targetUrl.startsWith('http')) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    // Save and cache the new app URL
+    await Setting.findOneAndUpdate(
+      { key: 'appUrl' },
+      { value: targetUrl },
+      { upsert: true }
+    );
+    setCachedAppUrl(targetUrl);
+
+    const result = await setupWebhook(targetUrl);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
-  const result = await setupWebhook(targetUrl);
-  res.json(result);
+});
+
+apiRouter.post('/api/telegram/manual-setup-mirror', requireAdminAuth, async (req, res) => {
+  try {
+    let targetUrl = req.body.url || process.env.APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    if (!targetUrl) {
+      const appUrlSetting = await Setting.findOne({ key: 'appUrl' });
+      targetUrl = appUrlSetting?.value || getCachedAppUrl() || (req.protocol + '://' + req.get('host'));
+    }
+
+    // Clean target url trailing slash
+    targetUrl = targetUrl.replace(/\/$/, "");
+    if (!targetUrl.startsWith('http')) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    // Save and cache the new app URL
+    await Setting.findOneAndUpdate(
+      { key: 'appUrl' },
+      { value: targetUrl },
+      { upsert: true }
+    );
+    setCachedAppUrl(targetUrl);
+
+    const activeBots = await MirrorBot.find({ isActive: true });
+    let successCount = 0;
+    let failedCount = 0;
+    const details = [];
+
+    for (const botDoc of activeBots) {
+      try {
+        stopMirrorBot(botDoc.token);
+        await startMirrorBot(botDoc, false);
+        successCount++;
+        details.push({ username: botDoc.botUsername || botDoc.token.substring(0, 8), success: true });
+      } catch (err: any) {
+        failedCount++;
+        details.push({ username: botDoc.botUsername || botDoc.token.substring(0, 8), success: false, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      url: targetUrl,
+      totalBots: activeBots.length,
+      successCount,
+      failedCount,
+      details
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 apiRouter.get('/api/stats/dashboard', requireAdminAuth, async (req, res) => {

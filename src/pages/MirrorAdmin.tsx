@@ -77,6 +77,7 @@ export function MirrorAdmin() {
   const [actionScreenshot, setActionScreenshot] = useState('');
   const [rejectionComment, setRejectionComment] = useState('');
   const [showProcessModal, setShowProcessModal] = useState<any | null>(null);
+  const [syncingWebhooks, setSyncingWebhooks] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -133,6 +134,24 @@ export function MirrorAdmin() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleSyncMirrorWebhooks = async () => {
+    setSyncingWebhooks(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await axios.post('/api/telegram/manual-setup-mirror', { url: window.location.origin });
+      if (res.data.success) {
+        setSuccessMsg(`Successfully synchronized webhooks for ${res.data.successCount} of ${res.data.totalBots} active clone bots!`);
+      } else {
+        setErrorMsg('Webhook synchronization failed.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.error || err.message || 'Error occurred while syncing webhooks');
+    } finally {
+      setSyncingWebhooks(false);
+    }
+  };
 
   const handleStartEditTier = (tier: TierConfig) => {
     setEditingTierId(tier.id);
@@ -665,6 +684,16 @@ export function MirrorAdmin() {
               <option value="active">Active Only</option>
               <option value="inactive">Inactive</option>
             </select>
+
+            {/* Sync Webhooks Button */}
+            <button
+              onClick={handleSyncMirrorWebhooks}
+              disabled={syncingWebhooks}
+              className="flex items-center gap-1 border border-blue-200 rounded-lg p-1.5 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed font-medium cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncingWebhooks ? 'animate-spin' : ''}`} />
+              {syncingWebhooks ? 'Syncing...' : 'Sync Webhooks'}
+            </button>
           </div>
         </div>
 
