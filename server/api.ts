@@ -1122,6 +1122,18 @@ apiRouter.use(['/api/stats/dashboard', '/api/commands', '/api/users', '/api/grou
   next();
 });
 
+interface AdminOtpData {
+  code: string;
+  createdAt: number;
+  expiresAt: number;
+  lastRequestedAt: number;
+}
+
+let activeAdminOtp: AdminOtpData | null = null;
+const ADMIN_TELEGRAM_IDS = ['8033206631', '8241699347'];
+const OTP_VALID_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_RESEND_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
 apiRouter.get('/api/admin/check-ip', (req, res) => {
   const ip = getClientIp(req);
   const now = Date.now();
@@ -1136,8 +1148,105 @@ apiRouter.get('/api/admin/check-ip', (req, res) => {
   res.json({ blocked: false });
 });
 
+apiRouter.get('/api/admin/otp-status', (req, res) => {
+  const now = Date.now();
+  if (!activeAdminOtp) {
+    return res.json({
+      hasActiveOtp: false,
+      cooldownInSeconds: 0,
+      expiresInSeconds: 0
+    });
+  }
+
+  const cooldownLeft = Math.max(0, Math.ceil((activeAdminOtp.lastRequestedAt + OTP_RESEND_COOLDOWN_MS - now) / 1000));
+  const expiresLeft = Math.max(0, Math.ceil((activeAdminOtp.expiresAt - now) / 1000));
+  const isValid = now < activeAdminOtp.expiresAt;
+
+  res.json({
+    hasActiveOtp: isValid,
+    cooldownInSeconds: cooldownLeft,
+    expiresInSeconds: expiresLeft
+  });
+});
+
+apiRouter.post('/api/admin/request-otp', loginRateLimiter, async (req, res) => {
+  const ip = getClientIp(req);
+  const now = Date.now();
+
+  let status = ipAttempts.get(ip);
+  if (status && status.blockedUntil > now) {
+    const hoursLeft = ((status.blockedUntil - now) / (1000 * 60 * 60)).toFixed(1);
+    return res.status(403).json({
+      blocked: true,
+      message: `Your IP is blocked. Please try again in ${hoursLeft} hours.`
+    });
+  }
+
+  // Check 5-minute resend cooldown
+  if (activeAdminOtp && (now - activeAdminOtp.lastRequestedAt) < OTP_RESEND_COOLDOWN_MS) {
+    const remainingSec = Math.ceil((OTP_RESEND_COOLDOWN_MS - (now - activeAdminOtp.lastRequestedAt)) / 1000);
+    const mins = Math.floor(remainingSec / 60);
+    const secs = remainingSec % 60;
+    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+    return res.status(429).json({
+      success: false,
+      cooldownActive: true,
+      cooldownInSeconds: remainingSec,
+      message: `OTP can only be resent after 5 minutes. Please wait ${timeStr} before requesting a new OTP.`
+    });
+  }
+
+  // Generate 6-digit random numeric OTP
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+  activeAdminOtp = {
+    code: otpCode,
+    createdAt: now,
+    expiresAt: now + OTP_VALID_DURATION_MS,
+    lastRequestedAt: now
+  };
+
+  // Send message via Telegram main bot to both admin user IDs
+  const bot = getBot();
+  let sendSuccessCount = 0;
+  let sendFailCount = 0;
+  const sendErrors: string[] = [];
+
+  if (bot && bot.telegram) {
+    const message = `🔐 *ADMIN LOGIN OTP*\n\nYour Admin Panel verification code is:\n\`${otpCode}\`\n\n⏰ *Valid for:* 5 minutes\n\n_If you did not request this login code, please secure your account immediately._`;
+    for (const adminId of ADMIN_TELEGRAM_IDS) {
+      try {
+        await bot.telegram.sendMessage(adminId, message, { parse_mode: 'Markdown' });
+        sendSuccessCount++;
+      } catch (err: any) {
+        console.error(`Failed to send OTP to Telegram admin ID ${adminId}:`, err.message);
+        sendFailCount++;
+        sendErrors.push(`Admin ${adminId}: ${err.message}`);
+      }
+    }
+  } else {
+    sendErrors.push("Main Telegram bot instance is not running or initialized.");
+  }
+
+  if (sendSuccessCount === 0) {
+    return res.status(500).json({
+      success: false,
+      message: `Failed to deliver OTP via Telegram. Details: ${sendErrors.join(', ')}`,
+      cooldownInSeconds: 300
+    });
+  }
+
+  return res.json({
+    success: true,
+    message: `OTP successfully sent to Telegram admin accounts (${sendSuccessCount} delivered). Code is valid for 5 minutes.`,
+    cooldownInSeconds: 300,
+    expiresInSeconds: 300
+  });
+});
+
 apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
-  const { key } = req.body;
+  const { otp } = req.body;
   const ip = getClientIp(req);
   const now = Date.now();
 
@@ -1156,20 +1265,27 @@ apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
     });
   }
 
-  const correctKey = process.env.ADMIN_SECRET_KEY || 'ARUSHNGGA9';
-  if (!key || !correctKey) {
-    return res.status(400).json({ success: false, message: 'Bad request' });
+  if (!otp || typeof otp !== 'string') {
+    return res.status(400).json({ success: false, message: 'Please enter the 6-digit OTP code.' });
   }
 
-  const keyBuffer = Buffer.from(key);
-  const correctBuffer = Buffer.from(correctKey);
-
-  let match = false;
-  if (keyBuffer.length === correctBuffer.length) {
-    match = crypto.timingSafeEqual(keyBuffer, correctBuffer);
+  if (!activeAdminOtp || now > activeAdminOtp.expiresAt) {
+    return res.status(400).json({
+      success: false,
+      message: 'OTP has expired or is invalid. Please request a new OTP.'
+    });
   }
+
+  const cleanInputOtp = otp.trim();
+  const match = crypto.timingSafeEqual(
+    Buffer.from(cleanInputOtp.padStart(6, ' ')),
+    Buffer.from(activeAdminOtp.code.padStart(6, ' '))
+  ) && cleanInputOtp.length === activeAdminOtp.code.length;
 
   if (match) {
+    // Invalidate active OTP so it cannot be reused
+    activeAdminOtp = null;
+
     // Reset attempts on successful login
     status.attempts = 0;
     status.blockedUntil = 0;
@@ -1192,7 +1308,7 @@ apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
     return res.json({ success: true });
   } else {
     status.attempts += 1;
-    
+
     if (status.attempts >= 5) {
       status.blockedUntil = now + (24 * 60 * 60 * 1000); // block 24h
       return res.status(403).json({
@@ -1213,7 +1329,7 @@ apiRouter.post('/api/admin/login', loginRateLimiter, (req, res) => {
     return res.status(401).json({
       success: false,
       attempts: status.attempts,
-      message: 'Invalid secret key'
+      message: 'Invalid OTP code. Please check your Telegram and try again.'
     });
   }
 });
