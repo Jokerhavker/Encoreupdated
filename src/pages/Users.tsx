@@ -11,10 +11,10 @@ export function Users() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingCreditsUser, setEditingCreditsUser] = useState<any>(null);
 
-  useEffect(() => { loadUsers(currentPage); }, [currentPage]);
+  useEffect(() => { loadUsers(currentPage, searchQuery); }, [currentPage, searchQuery]);
 
-  const loadUsers = (page: number) => {
-    axios.get(`/api/users?page=${page}&limit=50`).then(res => {
+  const loadUsers = (page: number, search = '') => {
+    axios.get(`/api/users?page=${page}&limit=50&search=${encodeURIComponent(search.trim())}`).then(res => {
       if (res.data.users) {
         setUsers(res.data.users);
         setTotalPages(res.data.pages || 1);
@@ -31,25 +31,18 @@ export function Users() {
 
   const toggleBan = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isBanned: !current });
-    loadUsers(currentPage);
+    loadUsers(currentPage, searchQuery);
   };
 
   const toggleAdmin = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isAdmin: !current });
-    loadUsers(currentPage);
+    loadUsers(currentPage, searchQuery);
   };
   
   const togglePremium = async (id: string, current: boolean) => {
     await axios.put(`/api/users/${id}`, { isPremium: !current });
-    loadUsers(currentPage);
+    loadUsers(currentPage, searchQuery);
   };
-
-  const filteredUsers = users.filter(u => 
-    (u.firstName && String(u.firstName).toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (u.username && String(u.username).toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (u.telegramId && String(u.telegramId).includes(searchQuery)) ||
-    (searchQuery.trim() === '')
-  );
 
   return (
     <div className="space-y-6">
@@ -62,7 +55,10 @@ export function Users() {
               type="text" 
               placeholder="Search users..." 
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               className="pl-9 pr-4 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-indigo-500 w-64" 
             />
           </div>
@@ -80,7 +76,7 @@ export function Users() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filteredUsers.map((u) => (
+              {users.map((u) => (
                 <tr key={u._id} className="hover:bg-gray-50/50">
                   <td className="px-6 py-4 font-medium text-gray-900">
                     <div className="flex items-center">
@@ -160,7 +156,7 @@ export function Users() {
         <UserCreditsModal 
           user={editingCreditsUser} 
           onClose={() => setEditingCreditsUser(null)} 
-          onSave={() => loadUsers(currentPage)} 
+          onSave={() => loadUsers(currentPage, searchQuery)} 
         />
       )}
     </div>

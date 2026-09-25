@@ -1569,20 +1569,41 @@ apiRouter.delete('/api/commands/:id', requireAdminAuth, async (req, res) => {
 
 apiRouter.get('/api/users', requireAdminAuth, async (req, res) => {
   try {
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const userFilter = search
+      ? {
+          $or: [
+            {
+              $expr: {
+                $regexMatch: {
+                  input: { $toString: '$telegramId' },
+                  regex: escapedSearch,
+                  options: 'i'
+                }
+              }
+            },
+            { firstName: { $regex: escapedSearch, $options: 'i' } },
+            { username: { $regex: escapedSearch, $options: 'i' } }
+          ]
+        }
+      : {};
+
     const page  = req.query.page ? parseInt(req.query.page as string) : null;
     if (page) {
       const limit = parseInt(req.query.limit as string) || 50;
       const skip  = (page - 1) * limit;
 
       const [users, total] = await Promise.all([
-        BotUser.find({}).sort({ interactions: -1 }).skip(skip).limit(limit).lean(),
-        BotUser.countDocuments(),
+        BotUser.find(userFilter).sort({ interactions: -1 }).skip(skip).limit(limit).lean(),
+        BotUser.countDocuments(userFilter),
       ]);
+      const pages = Math.max(1, Math.ceil(total / limit));
 
-      return res.json({ users, total, page, pages: Math.ceil(total / limit) });
+      return res.json({ users, total, page, pages });
     } else {
       // Return first 200 users for backward compatibility with frontend
-      const users = await BotUser.find({}).sort({ interactions: -1 }).limit(200).lean();
+      const users = await BotUser.find(userFilter).sort({ interactions: -1 }).limit(200).lean();
       return res.json(users);
     }
   } catch (err: any) {
@@ -3807,4 +3828,3 @@ apiRouter.get('/api/mass-run/history', requireUserAuth, async (req: any, res) =>
     res.status(500).json({ error: err.message });
   }
 });
-
