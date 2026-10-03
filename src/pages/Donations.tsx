@@ -5,7 +5,7 @@ import { Heart, Coins, QrCode, ToggleLeft, ToggleRight, Save, Send, ShieldAlert,
 export function Donations() {
   const [donations, setDonations] = useState<any[]>([]);
   const [config, setConfig] = useState({
-    payeeUpi: 'alkhkumar@fam',
+    payeeUpi: 'ionfwarush@slc',
     cryptoCurrencyName: 'USDT (TRC-20)',
     cryptoWalletAddress: '',
     showCrypto: false
@@ -215,7 +215,7 @@ export function Donations() {
                 value={config.payeeUpi}
                 onChange={e => setConfig({ ...config, payeeUpi: e.target.value })}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                placeholder="e.g. alkhkumar@fam"
+                placeholder="e.g. ionfwarush@slc"
                 required
               />
               <p className="text-[10px] text-gray-400 mt-1">Users will see a dynamically generated QR linking to this UPI payee handle.</p>

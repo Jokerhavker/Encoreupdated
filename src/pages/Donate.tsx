@@ -5,7 +5,7 @@ import { Heart, QrCode, Clipboard, Check, AlertCircle, Sparkles, Shield, Coins }
 export default function Donate() {
   const [activeTab, setActiveTab] = useState<'upi' | 'crypto'>('upi');
   const [config, setConfig] = useState<any>({
-    payeeUpi: 'alkhkumar@fam',
+    payeeUpi: 'ionfwarush@slc',
     cryptoCurrencyName: 'USDT (TRC-20)',
     cryptoWalletAddress: '',
     showCrypto: false
@@ -168,14 +168,141 @@ export default function Donate() {
           </div>
         )}
 
-        <div className="p-6 text-center space-y-4">
-          <div className="w-16 h-16 bg-rose-500/10 rounded-full flex items-center justify-center text-rose-400 mx-auto border border-rose-500/20">
-            🔒
-          </div>
-          <h4 className="text-base font-black text-rose-400">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
-          <p className="text-xs text-slate-400 leading-relaxed max-w-xs mx-auto">
-            Our donation and transaction verification portal is temporarily offline. Please check back in a few days.
-          </p>
+        <div className="p-6 space-y-4">
+          {successMsg && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 p-3.5 rounded-xl text-xs font-bold text-center">
+              {successMsg}
+            </div>
+          )}
+          {errorMsg && (
+            <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 p-3.5 rounded-xl text-xs font-bold text-center">
+              ⚠️ {errorMsg}
+            </div>
+          )}
+
+          {activeTab === 'upi' ? (
+            <form onSubmit={handleUpiSubmit} className="space-y-4 text-left">
+              <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-700/60 flex flex-col items-center">
+                <img 
+                  src={upiQrImageUrl} 
+                  alt="Donation UPI QR" 
+                  className="w-44 h-44 rounded-lg bg-white p-1 border shadow-md"
+                />
+                <div className="mt-3 flex items-center justify-center gap-2 bg-indigo-900/40 border border-indigo-700/50 px-3 py-1.5 rounded-lg text-xs font-mono font-bold text-indigo-200">
+                  <span>{config.payeeUpi || 'ionfwarush@slc'}</span>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(config.payeeUpi || 'ionfwarush@slc');
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="text-indigo-400 hover:text-indigo-200"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Clipboard className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1">Scan QR or copy Slice UPI address to contribute</span>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Your Name / Alias (Optional)</label>
+                <input 
+                  type="text" 
+                  value={upiName}
+                  onChange={(e) => setUpiName(e.target.value)}
+                  placeholder="e.g. John / Anonymous" 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Contribution Amount (₹ INR)</label>
+                <input 
+                  type="number" 
+                  value={upiAmount}
+                  onChange={(e) => setUpiAmount(e.target.value)}
+                  placeholder="e.g. 50" 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Transaction UTR / Ref ID (12 Digits)</label>
+                <input 
+                  type="text" 
+                  value={upiUtr}
+                  onChange={(e) => setUpiUtr(e.target.value)}
+                  placeholder="e.g. 627546785553" 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={loading}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white font-extrabold py-3 rounded-xl text-xs transition cursor-pointer"
+              >
+                {loading ? 'Verifying with Slice Gateway...' : 'VERIFY & SUBMIT DONATION'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleCryptoSubmit} className="space-y-4 text-left">
+              <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-700/60 flex flex-col items-center">
+                {cryptoQrImageUrl && (
+                  <img src={cryptoQrImageUrl} alt="Crypto Wallet QR" className="w-40 h-40 rounded-lg bg-white p-1 border shadow-md mb-2" />
+                )}
+                <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 px-3 py-1.5 rounded-lg text-[11px] font-mono text-slate-200 max-w-full overflow-hidden">
+                  <span className="truncate">{config.cryptoWalletAddress}</span>
+                  <button type="button" onClick={copyAddress} className="text-indigo-400 hover:text-indigo-200">
+                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Clipboard className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1">{config.cryptoCurrencyName} Wallet Address</span>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Your Name / Alias</label>
+                <input 
+                  type="text" 
+                  value={cryptoName}
+                  onChange={(e) => setCryptoName(e.target.value)}
+                  placeholder="e.g. Satoshi" 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Amount ($ USD)</label>
+                <input 
+                  type="number" 
+                  value={cryptoAmount}
+                  onChange={(e) => setCryptoAmount(e.target.value)}
+                  placeholder="e.g. 10" 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Transaction Hash / TxID</label>
+                <input 
+                  type="text" 
+                  value={cryptoUtr}
+                  onChange={(e) => setCryptoUtr(e.target.value)}
+                  placeholder="Paste transaction hash here..." 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={loading}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white font-extrabold py-3 rounded-xl text-xs transition cursor-pointer"
+              >
+                {loading ? 'Submitting...' : 'LOG CRYPTO DONATION'}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     </div>

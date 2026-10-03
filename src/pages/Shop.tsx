@@ -13,7 +13,9 @@ import {
   ShieldCheck, 
   Smartphone,
   Percent,
-  Coins
+  Coins,
+  Copy,
+  Loader2
 } from 'lucide-react';
 
 export function Shop() {
@@ -296,7 +298,7 @@ export function Shop() {
   const getUpiUrl = () => {
     if (!checkoutItem) return '';
     const cleanName = checkoutItem.name.replace(/[^a-zA-Z0-9]/g, ' ');
-    return `upi://pay?pa=alkhkumar@fam&pn=ENCORE_XOSINT_Shop&am=${checkoutItem.price}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
+    return `upi://pay?pa=ionfwarush@slc&pn=ENCORE_XOSINT_Shop&am=${checkoutItem.price}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
   };
 
   // QR Server generation URL
@@ -343,18 +345,7 @@ export function Shop() {
           </button>
         </div>
 
-        {/* PAYMENT WINDOW IS CLOSED WARNING BANNER */}
-        <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30 rounded-2xl p-4 mb-6 flex gap-3 items-start text-left">
-          <div className="bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 p-2 rounded-xl leading-none">
-            🔒
-          </div>
-          <div>
-            <h4 className="text-sm font-black text-rose-800 dark:text-rose-400">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
-            <p className="text-xs text-rose-700/80 dark:text-rose-400/80 mt-1 leading-normal">
-              Purchases, premium memberships, and credit top-ups are temporarily offline. Our shop system is in maintenance mode.
-            </p>
-          </div>
-        </div>
+
 
         {/* User Card */}
         {user && (
@@ -805,19 +796,63 @@ export function Shop() {
                 </p>
               </div>
             ) : (
-              <div className="text-center py-6 space-y-4" id="payment_closed_screen">
-                <div className="w-16 h-16 bg-rose-50 dark:bg-rose-950/40 rounded-full flex items-center justify-center text-rose-500 mx-auto border border-rose-100 dark:border-rose-900/30">
-                  🔒
+              <div className="space-y-4" id="payment_active_screen">
+                {/* QR Code and Payee UPI details */}
+                <div className="flex flex-col items-center justify-center p-3 bg-slate-50 dark:bg-gray-950 rounded-xl border border-slate-100 dark:border-gray-800">
+                  <img 
+                    src={getQrCodeSrc()} 
+                    alt="UPI Payment QR Code" 
+                    className="w-44 h-44 rounded-lg shadow-sm border border-slate-200 dark:border-gray-800 bg-white p-1"
+                  />
+                  
+                  <div className="mt-3 flex items-center justify-center gap-2 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40 px-3 py-1.5 rounded-lg text-xs font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                    <span>ionfwarush@slc</span>
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText('ionfwarush@slc');
+                        alert('UPI Handle copied: ionfwarush@slc');
+                      }}
+                      className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded cursor-pointer"
+                      title="Copy UPI Address"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Scan QR or copy Slice UPI handle to complete payment</p>
                 </div>
-                <h4 className="text-base font-black text-rose-700 dark:text-rose-400">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
-                  Purchases, premium memberships, and credit top-ups are temporarily suspended. Please check back in a few days.
-                </p>
+
+                {/* UTR Input Form */}
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 text-left">
+                    Enter 12-Digit Transaction UTR / Ref ID:
+                  </label>
+                  <input 
+                    type="text"
+                    value={paymentId}
+                    onChange={(e) => setPaymentId(e.target.value)}
+                    placeholder="e.g. 627546785553"
+                    className="w-full bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  {paymentError && (
+                    <p className="text-xs font-bold text-rose-500 text-left mt-1">
+                      ⚠️ {paymentError}
+                    </p>
+                  )}
+                </div>
+
                 <button 
-                  onClick={handleCloseCheckout}
-                  className="w-full bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white font-extrabold rounded-xl py-3 text-xs tracking-wide transition-all shadow-md mt-4"
+                  onClick={verifyPayment}
+                  disabled={paymentLoading || !paymentId.trim()}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 text-white font-extrabold rounded-xl py-3 text-xs tracking-wide transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  Okay
+                  {paymentLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Verifying via Slice Gateway...</span>
+                    </>
+                  ) : (
+                    <span>VERIFY PAYMENT NOW</span>
+                  )}
                 </button>
               </div>
             )}

@@ -562,33 +562,28 @@ apiRouter.post('/api/mirror-bots/verify-payment', async (req, res) => {
 
     let foundTxn: any = null;
     try {
-      const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanPaymentId}`);
-      if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
-        foundTxn = utrRes.data.results.find((item: any) => {
-          const isSuccess = String(item.Payment).toLowerCase() === 'success';
-          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-          return isSuccess && isAmountMatch;
-        });
-      }
-
-      if (!foundTxn) {
-        const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanPaymentId}`);
-        if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
-          foundTxn = idRes.data.results.find((item: any) => {
-            const isSuccess = String(item.Payment).toLowerCase() === 'success';
-            const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-            return isSuccess && isAmountMatch;
-          });
+      const res = await axios.get(`https://sliceapi.vercel.app/api/v1/verify?utr=${encodeURIComponent(cleanPaymentId)}`, { timeout: 15000 });
+      const data = res.data;
+      if (data && (data.success === true || data.status === "VERIFIED") && data.transaction) {
+        const txn = data.transaction;
+        const txnAmount = Number(txn.amount);
+        if (Math.abs(txnAmount - Number(amount)) < 1.0) {
+          foundTxn = {
+            utr: String(txn.utr || txn.txnId || cleanPaymentId),
+            txn_id: String(txn.txnId || txn.utr || cleanPaymentId),
+            amount: txnAmount,
+            payer: txn.payer || ''
+          };
         }
       }
     } catch (apiErr: any) {
-      console.error("[Fampay Verification Request Error]", apiErr.message);
-      return res.status(502).json({ error: 'Fampay payment service network error. Please try again.' });
+      console.error("[Slice Gateway Verification Request Error]", apiErr.message);
+      return res.status(502).json({ error: 'Slice payment gateway network error. Please try again in a few seconds.' });
     }
 
     if (!foundTxn) {
       return res.status(404).json({ 
-        error: 'Payment transaction not found or amount mismatch. Ensure you paid the exact amount and entered correct UTR.' 
+        error: 'Payment transaction not found on Slice Gateway or amount mismatch. Ensure you paid the exact amount to ionfwarush@slc and entered correct UTR.' 
       });
     }
 
@@ -1955,7 +1950,7 @@ apiRouter.get('/api/donations/config', requireAnyAuth, async (req, res) => {
   try {
     const configSetting = await Setting.findOne({ key: 'donationSystemConfig' });
     const defaultConfig = {
-      payeeUpi: process.env.PAYEE_UPI || 'alkhkumar@fam',
+      payeeUpi: process.env.PAYEE_UPI || 'ionfwarush@slc',
       cryptoCurrencyName: 'USDT (TRC-20)',
       cryptoWalletAddress: process.env.CRYPTO_WALLET || '',
       showCrypto: false
@@ -1979,7 +1974,7 @@ apiRouter.post('/api/donations/config', requireAdminAuth, async (req, res) => {
   try {
     const { payeeUpi, cryptoCurrencyName, cryptoWalletAddress, showCrypto } = req.body;
     const config = {
-      payeeUpi: payeeUpi || process.env.PAYEE_UPI || 'alkhkumar@fam',
+      payeeUpi: payeeUpi || process.env.PAYEE_UPI || 'ionfwarush@slc',
       cryptoCurrencyName: cryptoCurrencyName || 'USDT (TRC-20)',
       cryptoWalletAddress: cryptoWalletAddress || process.env.CRYPTO_WALLET || '',
       showCrypto: !!showCrypto
@@ -2138,38 +2133,31 @@ apiRouter.post('/api/donations/verify-upi', async (req, res) => {
       return res.status(400).json({ error: 'This donation transaction/UTR ID has already been added.' });
     }
 
-    // Call Fampay APIs
+    // Call Slice Gateway API
     let foundTxn: any = null;
     try {
-      // Query 1: Try as UTR
-      const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanUtr}`);
-      if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
-        foundTxn = utrRes.data.results.find((item: any) => {
-          const isSuccess = String(item.Payment).toLowerCase() === 'success';
-          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-          return isSuccess && isAmountMatch;
-        });
-      }
-
-      // Query 2: Try as ID if not found
-      if (!foundTxn) {
-        const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanUtr}`);
-        if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
-          foundTxn = idRes.data.results.find((item: any) => {
-            const isSuccess = String(item.Payment).toLowerCase() === 'success';
-            const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-            return isSuccess && isAmountMatch;
-          });
+      const res = await axios.get(`https://sliceapi.vercel.app/api/v1/verify?utr=${encodeURIComponent(cleanUtr)}`, { timeout: 15000 });
+      const data = res.data;
+      if (data && (data.success === true || data.status === "VERIFIED") && data.transaction) {
+        const txn = data.transaction;
+        const txnAmount = Number(txn.amount);
+        if (Math.abs(txnAmount - Number(amount)) < 1.0) {
+          foundTxn = {
+            utr: String(txn.utr || txn.txnId || cleanUtr),
+            txn_id: String(txn.txnId || txn.utr || cleanUtr),
+            amount: txnAmount,
+            payer: txn.payer || ''
+          };
         }
       }
     } catch (apiErr: any) {
-      console.error("[Donation Fampay verif error]", apiErr.message);
-      return res.status(502).json({ error: 'Verification service temporarily offline. Please try manually or wait and try again.' });
+      console.error("[Donation Slice verif error]", apiErr.message);
+      return res.status(502).json({ error: 'Slice payment gateway network error. Please try again in a moment.' });
     }
 
     if (!foundTxn) {
       return res.status(400).json({ 
-        error: `Transaction not found on Fampay or amount does not match ₹${amount}. Ensure payment is successful and exact amount was sent.` 
+        error: `Transaction not found on Slice Gateway or amount does not match ₹${amount}. Ensure payment was made to ionfwarush@slc.` 
       });
     }
 
@@ -2979,33 +2967,26 @@ apiRouter.post('/api/shop/verify-payment', async (req, res) => {
       return res.status(400).json({ error: 'This transaction/UTR ID has already been verified and used.' });
     }
 
-    // 2. Fetch from Fampay gateway
+    // 2. Fetch from Slice Gateway API
     let foundTxn: any = null;
     try {
-      // Query 1: Try as UTR
-      const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanPaymentId}`);
-      if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
-        foundTxn = utrRes.data.results.find((item: any) => {
-          const isSuccess = String(item.Payment).toLowerCase() === 'success';
-          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0; // tolerate small roundoffs
-          return isSuccess && isAmountMatch;
-        });
-      }
-
-      // Query 2: Try as ID/Transaction if not found
-      if (!foundTxn) {
-        const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanPaymentId}`);
-        if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
-          foundTxn = idRes.data.results.find((item: any) => {
-            const isSuccess = String(item.Payment).toLowerCase() === 'success';
-            const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-            return isSuccess && isAmountMatch;
-          });
+      const res = await axios.get(`https://sliceapi.vercel.app/api/v1/verify?utr=${encodeURIComponent(cleanPaymentId)}`, { timeout: 15000 });
+      const data = res.data;
+      if (data && (data.success === true || data.status === "VERIFIED") && data.transaction) {
+        const txn = data.transaction;
+        const txnAmount = Number(txn.amount);
+        if (Math.abs(txnAmount - Number(amount)) < 1.0) {
+          foundTxn = {
+            utr: String(txn.utr || txn.txnId || cleanPaymentId),
+            txn_id: String(txn.txnId || txn.utr || cleanPaymentId),
+            amount: txnAmount,
+            payer: txn.payer || ''
+          };
         }
       }
     } catch (apiErr: any) {
-      console.error("[Fampay Verification Request Error]", apiErr.message);
-      return res.status(502).json({ error: 'Fampay payment service network error. Please try again.' });
+      console.error("[Slice Gateway Verification Request Error]", apiErr.message);
+      return res.status(502).json({ error: 'Slice payment gateway network error. Please try again in a few seconds.' });
     }
 
     if (!foundTxn) {

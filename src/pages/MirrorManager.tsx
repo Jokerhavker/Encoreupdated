@@ -2193,13 +2193,16 @@ export function MirrorManager() {
 
                 {/* UPI Checkout Screen Portal Modal */}
                 {checkoutPlan && (() => {
+                  const upiUrl = `upi://pay?pa=ionfwarush@slc&pn=ENCORE_XOSINT_Clones&am=${checkoutPlan.price}&cu=INR&tn=${encodeURIComponent(`Upgrade to ${checkoutPlan.name}`)}`;
+                  const qrCodeSrc = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiUrl)}`;
+
                   return (
                     <div className="fixed inset-0 bg-indigo-950/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 font-sans animate-fade-in">
                       <div className="bg-white rounded-2xl max-w-sm w-full p-6 border shadow-2xl space-y-4 text-left max-h-[90vh] overflow-y-auto">
                         <div className="flex justify-between items-start border-b pb-2">
                           <div>
-                            <h4 className="font-extrabold text-sm text-gray-950">Payment Gateway Offline</h4>
-                            <p className="text-[10px] text-gray-450 font-semibold uppercase tracking-wider">{checkoutPlan.name} Subscription Plan</p>
+                            <h4 className="font-extrabold text-sm text-gray-950">Upgrade Plan Checkout</h4>
+                            <p className="text-[10px] text-gray-450 font-semibold uppercase tracking-wider">{checkoutPlan.name} Plan — ₹{checkoutPlan.price}</p>
                           </div>
                           <button 
                             onClick={() => setCheckoutPlan(null)}
@@ -2209,22 +2212,63 @@ export function MirrorManager() {
                           </button>
                         </div>
 
-                        <div className="py-6 text-center space-y-4">
-                          <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center text-rose-500 mx-auto border border-rose-100">
-                            🔒
+                        <div className="flex flex-col items-center justify-center p-3 bg-slate-50 rounded-xl border border-slate-100">
+                          <img 
+                            src={qrCodeSrc} 
+                            alt="UPI QR" 
+                            className="w-40 h-40 rounded-lg shadow-sm border bg-white p-1"
+                          />
+                          <div className="mt-2.5 flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg text-xs font-mono font-bold text-indigo-700">
+                            <span>ionfwarush@slc</span>
+                            <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText('ionfwarush@slc');
+                                alert('UPI address copied: ionfwarush@slc');
+                              }}
+                              className="text-indigo-500 hover:text-indigo-800 text-[10px] underline ml-1 cursor-pointer"
+                            >
+                              Copy
+                            </button>
                           </div>
-                          <h4 className="text-base font-black text-rose-800">PAYMENT WINDOW IS CLOSED FOR SOME DAYS</h4>
-                          <p className="text-xs text-slate-500 leading-relaxed text-center font-sans">
-                            Thank you for your interest! Purchases, tier renewals, and mirror bot plans are temporarily suspended. Please check back in a few days.
-                          </p>
+                          <p className="text-[10px] text-gray-400 mt-1">Pay ₹{checkoutPlan.price} to ionfwarush@slc via UPI</p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="block text-[11px] font-bold text-gray-700">
+                            Enter 12-Digit Payment UTR / Ref ID:
+                          </label>
+                          <input 
+                            type="text"
+                            value={utrInput}
+                            onChange={(e) => setUtrInput(e.target.value)}
+                            placeholder="e.g. 627546785553"
+                            className="w-full bg-white border rounded-xl px-3 py-2 text-xs font-mono font-bold text-gray-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                          />
+                          {payError && (
+                            <p className="text-[11px] font-bold text-rose-600">
+                              ⚠️ {payError}
+                            </p>
+                          )}
+                          {paySuccess && (
+                            <p className="text-[11px] font-bold text-emerald-600">
+                              {paySuccess}
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex gap-2 justify-end pt-2 border-t font-sans">
                           <button
                             onClick={() => setCheckoutPlan(null)}
-                            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-xl text-xs cursor-pointer text-center"
+                            className="px-4 py-2 border rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 cursor-pointer"
                           >
-                            Okay
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => handleVerifySubPayment(checkoutPlan.id, checkoutPlan.price)}
+                            disabled={paymentProcessing || !utrInput.trim()}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white font-bold py-2 px-4 rounded-xl text-xs cursor-pointer transition"
+                          >
+                            {paymentProcessing ? 'Verifying via Slice...' : 'Verify Payment'}
                           </button>
                         </div>
                       </div>

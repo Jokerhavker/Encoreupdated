@@ -32,39 +32,30 @@ const botShopStates = new Map<string, {
   originalAmount?: number;
 }>();
 
-// Fampay Verification call logic mirroring api.ts
-async function verifyFampayPayment(paymentId: string, amount: number) {
+// Slice Gateway Verification call logic
+async function verifySlicePayment(paymentId: string, amount: number) {
   const cleanPaymentId = String(paymentId).trim();
-  let foundTxn: any = null;
+  if (!cleanPaymentId) return null;
 
   try {
-    // Query 1: Try as UTR
-    const utrRes = await axios.get(`https://famnify.vercel.app/fampay?utr=${cleanPaymentId}`);
-    if (utrRes.data && utrRes.data.found && utrRes.data.results && utrRes.data.results.length > 0) {
-      foundTxn = utrRes.data.results.find((item: any) => {
-        const isSuccess = String(item.Payment).toLowerCase() === 'success';
-        const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-        return isSuccess && isAmountMatch;
-      });
-    }
-
-    // Query 2: Try as ID/Transaction if not found
-    if (!foundTxn) {
-      const idRes = await axios.get(`https://famnify.vercel.app/fampay?id=${cleanPaymentId}`);
-      if (idRes.data && idRes.data.found && idRes.data.results && idRes.data.results.length > 0) {
-        foundTxn = idRes.data.results.find((item: any) => {
-          const isSuccess = String(item.Payment).toLowerCase() === 'success';
-          const isAmountMatch = Math.abs(parseFloat(item.money) - Number(amount)) < 1.0;
-          return isSuccess && isAmountMatch;
-        });
+    const res = await axios.get(`https://sliceapi.vercel.app/api/v1/verify?utr=${encodeURIComponent(cleanPaymentId)}`, { timeout: 15000 });
+    const data = res.data;
+    if (data && (data.success === true || data.status === "VERIFIED") && data.transaction) {
+      const txn = data.transaction;
+      const txnAmount = Number(txn.amount);
+      if (Math.abs(txnAmount - Number(amount)) < 1.0) {
+        return {
+          utr: String(txn.utr || txn.txnId || cleanPaymentId),
+          txn_id: String(txn.txnId || txn.utr || cleanPaymentId),
+          amount: txnAmount,
+          payer: txn.payer || ''
+        };
       }
     }
   } catch (err: any) {
-    console.error("[Bot Fampay verification error]", err.message);
-    throw new Error('Payment verification service is temporarily offline. Please try again later.');
+    console.error("[Bot Slice Gateway verification error]", err?.message || err);
   }
-
-  return foundTxn;
+  return null;
 }
 
 // Render root bot shop menu
@@ -72,34 +63,29 @@ async function showBotShopMenu(ctx: any) {
   const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
   if (isGroup) {
     await ctx.reply(
-      `⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nOur bot shop is temporarily suspended. No purchases can be made at this moment.`,
-      {
-        parse_mode: "Markdown",
-      }
+      `🛍️ *ENCORE XOSINT Bot Shop*\n\nPlease message me in PM to browse plans and purchase credits or subscriptions.`,
+      { parse_mode: "Markdown" }
     ).catch(() => {});
     return;
   }
 
   const messageText = `🛍️ *ENCORE XOSINT Bot Shop* 🛍️\n\n` +
-    `⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\n` +
-    `Thank you for your interest! Purchases, premium subscriptions, and credit top-ups are temporarily suspended. Please check back in a few days.`;
+    `Welcome to our bot store! Upgrade your membership or purchase command credits for extended usage.\n\n` +
+    `💳 *Supported Payment Handle:* \`ionfwarush@slc\` (Slice UPI)\n\n` +
+    `Select an option below to proceed:`;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "🔙 Back to Start", callback_data: "view_start" } as any],
+      [{ text: "👑 Premium Subscriptions", callback_data: "shop_sub_tier_menu" }],
+      [{ text: "⚡ Buy Command Credits", callback_data: "shop_credits_menu" }],
+      [{ text: "🔙 Back to Start", callback_data: "view_start" }]
     ]
   };
 
   if (ctx.callbackQuery && ctx.callbackQuery.message) {
-    await ctx.editMessageText(messageText, {
-      parse_mode: "Markdown",
-      reply_markup: keyboard
-    }).catch(() => {});
+    await ctx.editMessageText(messageText, { parse_mode: "Markdown", reply_markup: keyboard }).catch(() => {});
   } else {
-    await ctx.reply(messageText, {
-      parse_mode: "Markdown",
-      reply_markup: keyboard
-    }).catch(() => {});
+    await ctx.reply(messageText, { parse_mode: "Markdown", reply_markup: keyboard }).catch(() => {});
   }
 }
 
@@ -114,7 +100,7 @@ async function generateSubCheckoutMessage(ctx: any, userId: string, matchedTier:
   });
 
   const cleanName = `${matchedTier.name} Subscription`.replace(/[^a-zA-Z0-9]/g, ' ');
-  const upiString = `upi://pay?pa=alkhkumar@fam&pn=ENCORE_XOSINT_Shop&am=${amount}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
+  const upiString = `upi://pay?pa=ionfwarush@slc&pn=ENCORE_XOSINT_Shop&am=${amount}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiString)}`;
 
   let couponText = "";
@@ -324,7 +310,7 @@ async function handleCreditsQtyInput(ctx: any, userId: string, text: string) {
 
   // Construct standard UPI payment URL
   const cleanName = `${qty} credits for ${cmd.command}`.replace(/[^a-zA-Z0-9]/g, ' ');
-  const upiString = `upi://pay?pa=alkhkumar@fam&pn=ENCORE_XOSINT_Shop&am=${finalPrice}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
+  const upiString = `upi://pay?pa=ionfwarush@slc&pn=ENCORE_XOSINT_Shop&am=${finalPrice}&cu=INR&tn=${encodeURIComponent(`XOSINT ${cleanName}`)}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiString)}`;
 
   let discountInfo = "";
@@ -386,8 +372,8 @@ async function handleUtrVerificationInput(ctx: any, userId: string, text: string
       return;
     }
 
-    // 2. Fetch from Fampay gateway
-    let foundTxn = await verifyFampayPayment(paymentId, amount);
+    // 2. Fetch from Slice Gateway API
+    let foundTxn = await verifySlicePayment(paymentId, amount);
 
     if (!foundTxn) {
       try {
@@ -410,7 +396,7 @@ async function handleUtrVerificationInput(ctx: any, userId: string, text: string
       }
 
       await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
-      await ctx.reply(`⚠️ *Transaction Not Found*\n\nPayment transaction was not found on Fampay or the amount does not match *₹${amount}*.\n\nMake sure:\n- Core payment is completed successfully.\n- You entered the correct UTR / Transaction ID.\n- You paid the exact amount: *₹${amount}*\n\nPlease respond with the correct UTR/ID, or click cancel:`, {
+      await ctx.reply(`⚠️ *Transaction Not Found*\n\nPayment transaction was not found on Slice Gateway or the amount does not match *₹${amount}*.\n\nMake sure:\n- Payment was completed successfully to \`ionfwarush@slc\`.\n- You entered the correct 12-digit UTR.\n- You paid the exact amount: *₹${amount}*\n\nPlease respond with the correct UTR, or click cancel:`, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
@@ -1619,11 +1605,26 @@ export async function initializeBot() {
 
   bot.action("shop_sub_tier_menu", async (ctx) => {
     try {
-      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and memberships are temporarily suspended. Please check back in a few days.`, {
+      const tiersSetting = await Setting.findOne({ key: 'subscriptionTiers' });
+      const tiers = (tiersSetting && Array.isArray(tiersSetting.value)) ? tiersSetting.value : [];
+      
+      let buttons: any[] = [];
+      if (tiers.length > 0) {
+        buttons = tiers.map((t: any) => [
+          { text: `👑 ${t.name} — ₹${t.price}/mo`, callback_data: `shop_sub_details:${t.id}` }
+        ]);
+      } else {
+        buttons.push([
+          { text: "👑 Premium VIP Subscription — ₹80/mo", callback_data: "shop_sub_details:premium" }
+        ]);
+      }
+      buttons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
+
+      const messageText = `👑 *Subscription Plans* 👑\n\nChoose a plan to view details and upgrade:`;
+
+      await ctx.editMessageText(messageText, {
         parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
-        }
+        reply_markup: { inline_keyboard: buttons }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     } catch (err) {
@@ -1807,11 +1808,26 @@ export async function initializeBot() {
 
   bot.action("shop_credits_menu", async (ctx) => {
     try {
-      await ctx.editMessageText(`⚠️ *PAYMENT WINDOW IS CLOSED FOR SOME DAYS*\n\nPurchases and credits are temporarily suspended. Please check back in a few days.`, {
+      const commands = await Command.find({ pricePerCredit: { $gt: 0 } });
+      
+      let buttons: any[] = [];
+      if (commands.length > 0) {
+        buttons = commands.map((cmd: any) => [
+          { text: `⚡ ${cmd.command} (₹${cmd.pricePerCredit}/credit)`, callback_data: `shop_credit_details:${cmd.command}` }
+        ]);
+      } else {
+        const defaultCmds = await Command.find().limit(10);
+        buttons = defaultCmds.map((cmd: any) => [
+          { text: `⚡ ${cmd.command}`, callback_data: `shop_credit_details:${cmd.command}` }
+        ]);
+      }
+      buttons.push([{ text: "🔙 Back to Shop", callback_data: "view_shop" }]);
+
+      const messageText = `⚡ *Buy Command Credits* ⚡\n\nSelect a command pack to purchase daily credits:`;
+
+      await ctx.editMessageText(messageText, {
         parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🔙 Back to Shop", callback_data: "view_shop" }]]
-        }
+        reply_markup: { inline_keyboard: buttons }
       }).catch(() => {});
       if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
     } catch (err) {
