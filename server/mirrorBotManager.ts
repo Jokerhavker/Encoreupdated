@@ -42,10 +42,6 @@ async function verifyFampayPayment(paymentId: string, amount: number) {
   }
   return null;
 }
-    console.error("Fampay verification error in mirrorBotManager:", err);
-  }
-  return foundTxn;
-}
 
 // Get running instance or null
 export function getMirroredBotInstance(token: string): Telegraf | null {
