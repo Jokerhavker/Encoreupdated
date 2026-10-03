@@ -1564,22 +1564,60 @@ apiRouter.delete('/api/commands/:id', requireAdminAuth, async (req, res) => {
 
 apiRouter.get('/api/users', requireAdminAuth, async (req, res) => {
   try {
+    const search = req.query.search ? String(req.query.search).trim() : '';
     const page  = req.query.page ? parseInt(req.query.page as string) : null;
-    if (page) {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const skip  = (page - 1) * limit;
+    const limit = req.query.limit !== undefined ? parseInt(req.query.limit as string) : 0;
 
-      const [users, total] = await Promise.all([
-        BotUser.find({}).sort({ interactions: -1 }).skip(skip).limit(limit).lean(),
-        BotUser.countDocuments(),
-      ]);
-
-      return res.json({ users, total, page, pages: Math.ceil(total / limit) });
-    } else {
-      // Return first 200 users for backward compatibility with frontend
-      const users = await BotUser.find({}).sort({ interactions: -1 }).limit(200).lean();
-      return res.json(users);
+    let filter: any = {};
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
+      filter = {
+        $or: [
+          { telegramId: regex },
+          { username: regex },
+          { firstName: regex },
+          { lastName: regex }
+        ]
+      };
     }
+
+    const totalInDb = await BotUser.countDocuments();
+    const totalMatched = search ? await BotUser.countDocuments(filter) : totalInDb;
+    const baseQuery = BotUser.find(filter).sort({ interactions: -1, createdAt: -1 });
+
+    if (page && limit > 0) {
+      const skip  = (page - 1) * limit;
+      const users = await baseQuery.skip(skip).limit(limit).lean();
+      return res.json({ 
+        users, 
+        total: totalInDb, 
+        totalMatched, 
+        page, 
+        pages: Math.ceil(totalMatched / limit),
+        hasMore: skip + users.length < totalMatched 
+      });
+    }
+
+    if (limit > 0) {
+      const skip = parseInt(req.query.skip as string) || 0;
+      const users = await baseQuery.skip(skip).limit(limit).lean();
+      return res.json({
+        users,
+        total: totalInDb,
+        totalMatched,
+        hasMore: skip + users.length < totalMatched
+      });
+    }
+
+    // Default or all=true: Return all users on a single page without truncation
+    const users = await baseQuery.lean();
+    return res.json({
+      users,
+      total: totalInDb,
+      totalMatched,
+      hasMore: false
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

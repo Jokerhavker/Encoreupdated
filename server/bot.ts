@@ -32,6 +32,239 @@ const botShopStates = new Map<string, {
   originalAmount?: number;
 }>();
 
+// Super Admin Telegram IDs
+export const BOT_ADMIN_IDS = ["8033206631", "8241699347"];
+
+export function isBotSuperAdmin(userId: string | number | undefined): boolean {
+  if (!userId) return false;
+  return BOT_ADMIN_IDS.includes(String(userId));
+}
+
+// Session map for in-bot admin wizard
+interface BotAdminSession {
+  action:
+    | 'search_user'
+    | 'add_credits_direct'
+    | 'sub_credits_direct'
+    | 'add_credits_custom'
+    | 'sub_credits_custom'
+    | 'set_credits_custom'
+    | 'set_coins_prompt'
+    | 'set_coins_custom'
+    | 'vip_prompt'
+    | 'vip_custom'
+    | 'ban_prompt'
+    | 'ban_custom'
+    | 'broadcast_prompt'
+    | 'broadcast_confirm'
+    | 'add_credits_amount'
+    | 'sub_credits_amount'
+    | 'set_credits_amount'
+    | 'set_coins_amount';
+  targetUserId?: string;
+  targetCommand?: string;
+  broadcastText?: string;
+}
+const botAdminSessions = new Map<string, BotAdminSession>();
+
+async function resolveTargetUser(input: string): Promise<any> {
+  const clean = String(input || '').trim();
+  if (!clean) return null;
+
+  // 1. Try numeric telegramId
+  let user = await BotUser.findOne({ telegramId: clean });
+  if (user) return user;
+
+  // 2. Try @username or username
+  const norm = clean.replace(/^@/, '');
+  user = await BotUser.findOne({ username: new RegExp(`^${norm}$`, 'i') });
+  if (user) return user;
+
+  // 3. Try name matching
+  user = await BotUser.findOne({
+    $or: [
+      { username: new RegExp(norm, 'i') },
+      { firstName: new RegExp(norm, 'i') },
+      { lastName: new RegExp(norm, 'i') }
+    ]
+  });
+  return user;
+}
+
+function getUserCommonCredits(userDoc: any, cmd: string): number {
+  if (!userDoc || !userDoc.commonCredits) return 0;
+  const cleanCmd = cmd.startsWith('/') ? cmd : '/' + cmd;
+  if (typeof userDoc.commonCredits.get === 'function') {
+    return userDoc.commonCredits.get(cleanCmd) || 0;
+  }
+  return userDoc.commonCredits[cleanCmd] || 0;
+}
+
+function setUserCommonCredits(userDoc: any, cmd: string, amount: number) {
+  if (!userDoc.commonCredits) {
+    userDoc.commonCredits = new Map();
+  }
+  const cleanCmd = cmd.startsWith('/') ? cmd : '/' + cmd;
+  if (typeof userDoc.commonCredits.set === 'function') {
+    userDoc.commonCredits.set(cleanCmd, amount);
+  } else {
+    userDoc.commonCredits[cleanCmd] = amount;
+  }
+  userDoc.markModified('commonCredits');
+}
+
+function addOrRemoveUserCredits(userDoc: any, cmd: string, delta: number): number {
+  const current = getUserCommonCredits(userDoc, cmd);
+  const newBalance = Math.max(0, current + delta);
+  setUserCommonCredits(userDoc, cmd, newBalance);
+  return newBalance;
+}
+
+function setUserDailyLimit(userDoc: any, cmd: string, limit: number, isUnlimited = false) {
+  const cleanCmd = cmd.startsWith('/') ? cmd : '/' + cmd;
+  let list = userDoc.commandCredits || [];
+  const idx = list.findIndex((c: any) => c.command === cleanCmd);
+  if (idx >= 0) {
+    list[idx].dailyLimit = limit;
+    list[idx].isUnlimited = isUnlimited;
+  } else {
+    list.push({ command: cleanCmd, dailyLimit: limit, isUnlimited });
+  }
+  userDoc.commandCredits = list;
+  userDoc.markModified('commandCredits');
+}
+
+async function renderAdminUserProfile(user: any): Promise<{ text: string; markup: any }> {
+  const creditCmds = await Command.find({ isCreditBased: true });
+  let creditsText = "";
+
+  if (creditCmds.length > 0) {
+    creditCmds.forEach((cmd: any) => {
+      const override = user.commandCredits?.find((c: any) => c.command === cmd.command);
+      const limit = override?.isUnlimited ? "Unlimited" : (override?.dailyLimit ?? cmd.defaultDailyCredits ?? 0);
+      const commonBal = getUserCommonCredits(user, cmd.command);
+      creditsText += `• \`${cmd.command}\`: Daily \`${limit}\` | Extra: *${commonBal}*\n`;
+    });
+  } else {
+    creditsText = "• No credit-based commands configured in system\n";
+  }
+
+  const expiryStr = user.isPremium
+    ? (user.premiumExpiresAt ? new Date(user.premiumExpiresAt).toLocaleDateString("en-IN") : "Lifetime")
+    : "None";
+
+  const userText = `👤 *USER DETAILS INSPECTION*\n\n` +
+    `🆔 *Telegram ID:* \`${user.telegramId}\`\n` +
+    `👤 *Name:* ${user.firstName || 'N/A'} ${user.username ? `(@${user.username})` : ''}\n` +
+    `📊 *Status:* ${user.isBanned ? "🚫 BANNED" : "✅ ACTIVE"}\n` +
+    `👑 *Role:* ${user.isAdmin ? "🛡️ Admin" : user.isPremium ? "⭐ VIP Member" : "Standard User"}\n` +
+    `⏳ *VIP Expiry:* \`${expiryStr}\`\n` +
+    `🪙 *ENC Coins Balance:* *${user.encCoins || 0}*\n` +
+    `📈 *Total Interactions:* ${user.interactions || 0}\n` +
+    `💬 *Started Bot in PM:* ${user.hasStartedBot ? "Yes" : "No"}\n` +
+    `👥 *Group Daily Limit:* ${user.isGroupUnlimited ? "Unlimited" : (user.groupCreditsLimit ?? 50)} (Used: ${user.groupCreditsUsed || 0})\n\n` +
+    `⚡ *Command Credits Breakdown:*\n${creditsText}`;
+
+  const markup = {
+    inline_keyboard: [
+      [
+        { text: "⚡ Add Credits", callback_data: `adm_add_c:${user.telegramId}` },
+        { text: "➖ Remove Credits", callback_data: `adm_sub_c:${user.telegramId}` }
+      ],
+      [
+        { text: "✏️ Set Daily Limit", callback_data: `adm_lim_c:${user.telegramId}` },
+        { text: "🪙 Edit ENC Coins", callback_data: `adm_coin_menu:${user.telegramId}` }
+      ],
+      [
+        { text: "👑 VIP Management", callback_data: `adm_vip_menu:${user.telegramId}` },
+        { text: user.isBanned ? "🟢 Unban User" : "🚫 Ban User", callback_data: `adm_ban:${user.telegramId}` }
+      ],
+      [
+        { text: "🔄 Reset Today's Usage", callback_data: `adm_reset_usage:${user.telegramId}` },
+        { text: "🔍 Search Another User", callback_data: "adm_search_user" }
+      ],
+      [
+        { text: "🔙 Admin Menu", callback_data: "admin_main_menu" }
+      ]
+    ]
+  };
+
+  return { text: userText, markup };
+}
+
+async function showAdminMainMenu(ctx: any) {
+  const userId = String(ctx.from?.id);
+  if (!isBotSuperAdmin(userId)) {
+    const replyOpts = ctx.callbackQuery ? {} : { reply_parameters: { message_id: ctx.message?.message_id } };
+    return ctx.reply("⛔ *Access Denied:* This admin panel is reserved for authorized bot administrators (Ayush & Arush).", { parse_mode: "Markdown", ...replyOpts });
+  }
+
+  botAdminSessions.delete(userId);
+
+  const [totalUsers, totalGroups, totalCommands, bannedCount, premiumCount] = await Promise.all([
+    BotUser.countDocuments(),
+    BotGroup.countDocuments(),
+    Command.countDocuments(),
+    BotUser.countDocuments({ isBanned: true }),
+    BotUser.countDocuments({ isPremium: true })
+  ]);
+
+  const activeToday = await BotUser.countDocuments({
+    "commandUsage.lastResetDate": new Date().toISOString().split("T")[0]
+  });
+
+  const appUrl = getAppUrl();
+  const adminName = userId === "8033206631" ? "Ayush" : userId === "8241699347" ? "Arush" : (ctx.from?.first_name || "Admin");
+
+  const messageText = `👑 *ENCORE XOSINT — SUPER ADMIN PANEL* 👑\n\n` +
+    `👋 Logged in as: *${adminName}* (\`${userId}\`)\n\n` +
+    `📊 *Live Database Statistics:*\n` +
+    `• 👥 Total Users: *${totalUsers.toLocaleString()}*\n` +
+    `• ⚡ Active Users Today: *${activeToday.toLocaleString()}*\n` +
+    `• 🏰 Tracked Groups: *${totalGroups.toLocaleString()}*\n` +
+    `• ⚡ Available Commands: *${totalCommands.toLocaleString()}*\n` +
+    `• 👑 VIP / Premium Users: *${premiumCount.toLocaleString()}*\n` +
+    `• 🚫 Banned Users: *${bannedCount.toLocaleString()}*\n\n` +
+    `⚡ *Quick Text Commands:*\n` +
+    `• Search: \`/user <id or username>\`\n` +
+    `• Add Credits: \`/addcredits <id> <command> <amount>\`\n` +
+    `• Remove Credits: \`/removecredits <id> <command> <amount>\`\n` +
+    `• Set Daily Limit: \`/setcredits <id> <command> <limit>\`\n` +
+    `• Set Coins: \`/setcoins <id> <amount>\` | \`/addcoins <id> <amount>\`\n` +
+    `• VIP: \`/setvip <id> [days]\` | \`/removevip <id>\`\n` +
+    `• Moderation: \`/ban <id>\` | \`/unban <id>\`\n\n` +
+    `Choose an administration option below:`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔍 Search & Inspect User Details", callback_data: "adm_search_user" }],
+      [
+        { text: "⚡ Add Credits to User", callback_data: "adm_add_credits_direct" },
+        { text: "➖ Remove Credits from User", callback_data: "adm_sub_credits_direct" }
+      ],
+      [
+        { text: "🪙 Edit ENC Coins", callback_data: "adm_coins_prompt" },
+        { text: "👑 VIP Management", callback_data: "adm_vip_prompt" }
+      ],
+      [
+        { text: "🚫 Ban / Unban User", callback_data: "adm_ban_prompt" },
+        { text: "📢 Broadcast Message", callback_data: "adm_broadcast_prompt" }
+      ],
+      [
+        { text: "📊 Detailed System Analytics", callback_data: "adm_system_stats" },
+        { text: "🌐 Open Web Admin Portal", web_app: { url: `${appUrl}/users` } }
+      ],
+      [{ text: "🔙 Return to Start Menu", callback_data: "view_start" }]
+    ]
+  };
+
+  if (ctx.callbackQuery && ctx.callbackQuery.message) {
+    await ctx.editMessageText(messageText, { parse_mode: "Markdown", reply_markup: keyboard }).catch(() => {});
+  } else {
+    await ctx.reply(messageText, { parse_mode: "Markdown", reply_markup: keyboard }).catch(() => {});
+  }
+}
+
 // Slice Gateway Verification call logic
 async function verifySlicePayment(paymentId: string, amount: number) {
   const cleanPaymentId = String(paymentId).trim();
@@ -1571,13 +1804,21 @@ export async function initializeBot() {
         ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
       if (!isGroup) {
         const appUrl = getAppUrl();
+        const isAdminUser = isBotSuperAdmin(ctx.from?.id);
+        const buttons: any[] = [
+          [{ text: "👤 My Profile", callback_data: "view_profile", style: "success" } as any],
+          [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors` } } as any],
+          [{ text: "🛍️ Bot Shop (New)", callback_data: "view_shop", style: "success" } as any],
+          [{ text: "ℹ️ Help Center", callback_data: "view_help", style: "primary" } as any],
+        ];
+
+        // Insert Admin Panel button visible ONLY to the two super admins
+        if (isAdminUser) {
+          buttons.splice(2, 0, [{ text: "👑 Admin Panel", callback_data: "admin_main_menu" } as any]);
+        }
+
         const markup = {
-          inline_keyboard: [
-            [{ text: "👤 My Profile", callback_data: "view_profile", style: "success" } as any],
-            [{ text: "🤖 MAKE YOUR OWN BOT", web_app: { url: `${appUrl}/mirrors` } } as any],
-            [{ text: "🛍️ Bot Shop (New)", callback_data: "view_shop", style: "success" } as any],
-            [{ text: "ℹ️ Help Center", callback_data: "view_help", style: "primary" } as any],
-          ],
+          inline_keyboard: buttons,
         };
         const txt =
           "✨ *Welcome to ENCORE XOSINT* ✨\n\n✅ *Status:* Bot is fully operational.\n\nYou can get multiple information using this bot. Try exploring some commands or use /help to see how it works!";
@@ -1889,10 +2130,1193 @@ export async function initializeBot() {
     if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
   });
 
+  // ==========================================
+  // IN-BOT SUPER ADMIN PANEL ACTIONS & ROUTERS
+  // ==========================================
+  bot.action("admin_main_menu", async (ctx) => {
+    try {
+      await showAdminMainMenu(ctx);
+      if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+    } catch (err: any) {
+      console.error("Admin main menu error:", err);
+      if (ctx.callbackQuery) await ctx.answerCbQuery("Error loading admin menu").catch(() => ({}));
+    }
+  });
+
+  bot.action("adm_search_user", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'search_user' });
+    const txt = `🔍 *Search User in Database*\n\nPlease send the **Telegram ID** (e.g. \`8033206631\`) or **@username** of the user you want to inspect:\n\n_(You can type and send it in chat now)_`;
+    const markup = {
+      inline_keyboard: [[{ text: "❌ Cancel", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Direct Add Credits: Enter user ID, command, and amount
+  bot.action("adm_add_credits_direct", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'add_credits_direct' });
+    const txt = `⚡ *Add Credits to User*\n\n` +
+      `Please send the User ID (or @username), Command Name, and Amount in chat:\n\n` +
+      `👉 **Format:** \`<userId> <command> <amount>\`\n` +
+      `👉 **Example:** \`8033206631 /phone 50\`\n` +
+      `👉 **Example:** \`@username num 100\`\n\n` +
+      `_(Or type \`/cancel\` to return to admin panel)_`;
+
+    const markup = {
+      inline_keyboard: [
+        [{ text: "🔍 Search & Select User First", callback_data: "adm_search_user" }],
+        [{ text: "❌ Cancel", callback_data: "admin_main_menu" }]
+      ]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Direct Remove Credits: Enter user ID, command, and amount
+  bot.action("adm_sub_credits_direct", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'sub_credits_direct' });
+    const txt = `➖ *Remove Credits from User*\n\n` +
+      `Please send the User ID (or @username), Command Name, and Amount to deduct:\n\n` +
+      `👉 **Format:** \`<userId> <command> <amount>\`\n` +
+      `👉 **Example:** \`8033206631 /phone 20\`\n` +
+      `👉 **Example:** \`@username num 30\`\n\n` +
+      `_(Or type \`/cancel\` to return to admin panel)_`;
+
+    const markup = {
+      inline_keyboard: [
+        [{ text: "🔍 Search & Select User First", callback_data: "adm_search_user" }],
+        [{ text: "❌ Cancel", callback_data: "admin_main_menu" }]
+      ]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  bot.action("adm_credits_menu", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'add_credits_direct' });
+    const txt = `⚡ *Add / Remove Command Credits*\n\nYou can send the command in chat directly or enter the user details:\n\n` +
+      `👉 **Add Credits:**\n\`/addcredits <userId> <command> <amount>\`\n_Example:_ \`/addcredits 8033206631 /phone 50\`\n\n` +
+      `👉 **Remove Credits:**\n\`/removecredits <userId> <command> <amount>\`\n_Example:_ \`/removecredits 8033206631 /phone 20\`\n\n` +
+      `👉 **Set Daily Limit:**\n\`/setcredits <userId> <command> <limit>\`\n_Example:_ \`/setcredits 8033206631 /phone 100\`\n\n` +
+      `Or send: \`<userId> <command> <amount>\` right now:`;
+
+    const markup = {
+      inline_keyboard: [
+        [{ text: "⚡ Add Credits", callback_data: "adm_add_credits_direct" }, { text: "➖ Remove Credits", callback_data: "adm_sub_credits_direct" }],
+        [{ text: "🔍 Search & Select User First", callback_data: "adm_search_user" }],
+        [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+      ]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  bot.action("adm_coins_prompt", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'set_coins_prompt' });
+    const txt = `🪙 *Edit ENC Coins Balance*\n\nPlease send the **User ID** (or @username) and **Coins** in chat:\n\n` +
+      `• **Set Exact Balance:** \`<userId> <coins>\` (e.g. \`8033206631 500\`)\n` +
+      `• **Add Coins:** \`<userId> +<amount>\` (e.g. \`8033206631 +100\`)\n` +
+      `• **Deduct Coins:** \`<userId> -<amount>\` (e.g. \`8033206631 -50\`)\n\n` +
+      `Or slash commands: \`/setcoins <userId> <amount>\` | \`/addcoins <userId> <amount>\``;
+    const markup = {
+      inline_keyboard: [[{ text: "❌ Cancel", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Quick ENC Coin Menu on user card
+  bot.action(/^adm_coin_menu:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    const txt = `🪙 *Edit ENC Coins Balance*\n\n` +
+      `• User: \`${targetUserId}\` (${user.firstName || 'N/A'})\n` +
+      `• Current Coins: *${user.encCoins || 0}* Coins\n\n` +
+      `Choose a quick adjustment or set custom amount:`;
+
+    const markup = {
+      inline_keyboard: [
+        [
+          { text: "+50 Coins", callback_data: `adm_quick_coin:${targetUserId}:50` },
+          { text: "+100 Coins", callback_data: `adm_quick_coin:${targetUserId}:100` },
+          { text: "+500 Coins", callback_data: `adm_quick_coin:${targetUserId}:500` }
+        ],
+        [
+          { text: "-50 Coins", callback_data: `adm_quick_coin:${targetUserId}:-50` },
+          { text: "Reset to 0", callback_data: `adm_quick_coin:${targetUserId}:0_set` },
+          { text: "✏️ Custom Amount", callback_data: `adm_coin:${targetUserId}` }
+        ],
+        [
+          { text: "🔙 Back to User Card", callback_data: `adm_view_u:${targetUserId}` }
+        ]
+      ]
+    };
+
+    await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Quick coin action handler
+  bot.action(/^adm_quick_coin:([^:]+):(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const act = ctx.match[2];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    if (act === '0_set') {
+      user.encCoins = 0;
+    } else {
+      const delta = parseInt(act);
+      user.encCoins = Math.max(0, (user.encCoins || 0) + delta);
+    }
+    await user.save();
+
+    await ctx.answerCbQuery(`🪙 Coins updated! Balance: ${user.encCoins}`).catch(() => ({}));
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+  });
+
+  // VIP options menu on user card
+  bot.action(/^adm_vip_menu:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    const expiryStr = user.isPremium
+      ? (user.premiumExpiresAt ? new Date(user.premiumExpiresAt).toLocaleDateString("en-IN") : "Lifetime")
+      : "Not VIP";
+
+    const txt = `👑 *Manage VIP Membership*\n\n` +
+      `• User: \`${targetUserId}\` (${user.firstName || 'N/A'})\n` +
+      `• Status: *${user.isPremium ? "⭐ VIP Active" : "Standard User"}*\n` +
+      `• Expiry: \`${expiryStr}\`\n\n` +
+      `Select duration to grant or revoke:`;
+
+    const markup = {
+      inline_keyboard: [
+        [
+          { text: "⭐ 7 Days", callback_data: `adm_quick_vip:${targetUserId}:7` },
+          { text: "⭐ 30 Days", callback_data: `adm_quick_vip:${targetUserId}:30` }
+        ],
+        [
+          { text: "⭐ 90 Days", callback_data: `adm_quick_vip:${targetUserId}:90` },
+          { text: "🌟 Lifetime", callback_data: `adm_quick_vip:${targetUserId}:9999` }
+        ],
+        [
+          { text: "❌ Revoke VIP Access", callback_data: `adm_quick_vip:${targetUserId}:0` }
+        ],
+        [
+          { text: "🔙 Back to User Card", callback_data: `adm_view_u:${targetUserId}` }
+        ]
+      ]
+    };
+
+    await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Quick VIP duration action
+  bot.action(/^adm_quick_vip:([^:]+):(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const days = parseInt(ctx.match[2]);
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    if (days <= 0) {
+      user.isPremium = false;
+      user.premiumExpiresAt = undefined;
+      user.premiumTier = null;
+      await ctx.answerCbQuery("❌ VIP Revoked").catch(() => ({}));
+    } else {
+      user.isPremium = true;
+      user.premiumExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+      user.premiumTier = 'premium';
+      await ctx.answerCbQuery(`👑 VIP Granted for ${days > 1000 ? 'Lifetime' : days + ' days'}!`).catch(() => ({}));
+    }
+    await user.save();
+
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+  });
+
+  // Reset daily usage for user
+  bot.action(/^adm_reset_usage:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    user.commandUsage = [];
+    user.groupCreditsUsed = 0;
+    await user.save();
+
+    await ctx.answerCbQuery("🔄 Today's command usage reset to 0!").catch(() => ({}));
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+  });
+
+  // In-Bot Broadcast announcement prompt
+  bot.action("adm_broadcast_prompt", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'broadcast_prompt' });
+    const txt = `📢 *Broadcast Announcement to All Users*\n\n` +
+      `Please send the announcement message you want to broadcast in chat right now.\n\n` +
+      `• Supports Markdown or plain text\n` +
+      `• You will see a confirmation preview before sending\n` +
+      `• Type \`/cancel\` to abort.`;
+
+    const markup = {
+      inline_keyboard: [[{ text: "❌ Cancel", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Confirm broadcast send
+  bot.action("adm_broadcast_confirm", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    const session = botAdminSessions.get(userId);
+    if (!session || session.action !== 'broadcast_confirm' || !session.broadcastText) {
+      await ctx.answerCbQuery("No pending broadcast found.").catch(() => ({}));
+      return;
+    }
+
+    const broadcastMsg = session.broadcastText;
+    botAdminSessions.delete(userId);
+
+    await ctx.editMessageText(`🚀 *Starting Broadcast...*\nDelivering message to all bot users in background.`, { parse_mode: "Markdown" }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+
+    // Execute background broadcast safely
+    (async () => {
+      try {
+        const users = await BotUser.find({ isBanned: { $ne: true } }).select('telegramId').lean();
+        let delivered = 0;
+        let failed = 0;
+
+        for (const u of users) {
+          if (!u.telegramId) continue;
+          try {
+            await bot.telegram.sendMessage(u.telegramId, broadcastMsg, { parse_mode: "Markdown" });
+            delivered++;
+          } catch {
+            failed++;
+          }
+          // Delay to respect Telegram limits
+          await new Promise(r => setTimeout(r, 35));
+        }
+
+        await bot.telegram.sendMessage(userId, `📢 *Broadcast Completed!*\n\n• Total Targets: *${users.length}*\n• Successfully Delivered: *${delivered}*\n• Failed / Blocked: *${failed}*`, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[{ text: "👑 Admin Panel", callback_data: "admin_main_menu" }]]
+          }
+        }).catch(() => {});
+      } catch (err: any) {
+        console.error("In-bot broadcast error:", err);
+      }
+    })();
+  });
+
+  bot.action("adm_vip_prompt", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'vip_custom' });
+    const txt = `👑 *Grant / Revoke VIP Access*\n\nPlease send: \`<userId> [days]\`\nExample: \`8033206631 30\` (30 days)\nExample: \`8033206631 0\` (to revoke)\n\nOr use: \`/setvip <userId> 30\``;
+    const markup = {
+      inline_keyboard: [[{ text: "❌ Cancel", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  bot.action("adm_ban_prompt", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    botAdminSessions.set(userId, { action: 'ban_custom' });
+    const txt = `🚫 *Ban / Unban User*\n\nPlease send the **Telegram ID** of the user to toggle ban/unban status:\n\nOr use: \`/ban <userId>\` | \`/unban <userId>\``;
+    const markup = {
+      inline_keyboard: [[{ text: "❌ Cancel", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  bot.action("adm_system_stats", async (ctx) => {
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    const [totalUsers, totalGroups, totalCommands, bannedCount, premiumCount, totalCalls] = await Promise.all([
+      BotUser.countDocuments(),
+      BotGroup.countDocuments(),
+      Command.countDocuments(),
+      BotUser.countDocuments({ isBanned: true }),
+      BotUser.countDocuments({ isPremium: true }),
+      Statlog.countDocuments()
+    ]);
+
+    const activeToday = await BotUser.countDocuments({
+      "commandUsage.lastResetDate": new Date().toISOString().split("T")[0]
+    });
+
+    const txt = `📊 *DETAILED SYSTEM ANALYTICS* 📊\n\n` +
+      `👥 *User Base:* ${totalUsers.toLocaleString()} registered\n` +
+      `⚡ *Active Users Today:* ${activeToday.toLocaleString()}\n` +
+      `🏰 *Bot Groups:* ${totalGroups.toLocaleString()} groups tracking\n` +
+      `👑 *Paid VIP Members:* ${premiumCount.toLocaleString()}\n` +
+      `🚫 *Banned Users:* ${bannedCount.toLocaleString()}\n` +
+      `📈 *Lifetime Command Queries:* ${totalCalls.toLocaleString()}\n` +
+      `🛠️ *Available Commands:* ${totalCommands.toLocaleString()}\n\n` +
+      `✅ *Server & Bot State:* Healthy & Operational`;
+
+    const markup = {
+      inline_keyboard: [[{ text: "🔙 Back to Admin Menu", callback_data: "admin_main_menu" }]]
+    };
+
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      await ctx.editMessageText(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    } else {
+      await ctx.reply(txt, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    }
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Action: Add credits to user -> choose command
+  bot.action(/^adm_add_c:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    const creditCmds = await Command.find({ isCreditBased: true });
+    if (creditCmds.length === 0) {
+      await ctx.answerCbQuery("No credit-based commands found in database.").catch(() => ({}));
+      return;
+    }
+
+    const buttons = creditCmds.map(cmd => [
+      { text: `⚡ ${cmd.command}`, callback_data: `adm_sel_cmd_add:${targetUserId}:${cmd.command}` }
+    ]);
+    buttons.push([{ text: "🔙 Back to Profile", callback_data: `adm_view_u:${targetUserId}` }]);
+
+    await ctx.editMessageText(`⚡ *Select Command to ADD Credits:*\nTarget User: \`${targetUserId}\``, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: buttons }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Action: Remove credits from user -> choose command
+  bot.action(/^adm_sub_c:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    const creditCmds = await Command.find({ isCreditBased: true });
+    if (creditCmds.length === 0) {
+      await ctx.answerCbQuery("No credit-based commands found in database.").catch(() => ({}));
+      return;
+    }
+
+    const buttons = creditCmds.map(cmd => [
+      { text: `⚡ ${cmd.command}`, callback_data: `adm_sel_cmd_sub:${targetUserId}:${cmd.command}` }
+    ]);
+    buttons.push([{ text: "🔙 Back to Profile", callback_data: `adm_view_u:${targetUserId}` }]);
+
+    await ctx.editMessageText(`➖ *Select Command to DEDUCT Credits:*\nTarget User: \`${targetUserId}\``, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: buttons }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Action: Set daily limit override for user -> choose command
+  bot.action(/^adm_lim_c:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const userId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(userId)) return;
+
+    const creditCmds = await Command.find({ isCreditBased: true });
+    if (creditCmds.length === 0) {
+      await ctx.answerCbQuery("No credit-based commands found in database.").catch(() => ({}));
+      return;
+    }
+
+    const buttons = creditCmds.map(cmd => [
+      { text: `⚡ ${cmd.command}`, callback_data: `adm_sel_cmd_lim:${targetUserId}:${cmd.command}` }
+    ]);
+    buttons.push([{ text: "🔙 Back to Profile", callback_data: `adm_view_u:${targetUserId}` }]);
+
+    await ctx.editMessageText(`✏️ *Select Command to Override Daily Limit:*\nTarget User: \`${targetUserId}\``, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: buttons }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Selected command to add credits
+  bot.action(/^adm_sel_cmd_add:([^:]+):(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const cmdName = ctx.match[2];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    botAdminSessions.set(adminId, {
+      action: 'add_credits_amount',
+      targetUserId,
+      targetCommand: cmdName
+    });
+
+    const txt = `➕ *Add Credits to User:*\n` +
+      `• User: \`${targetUserId}\`\n` +
+      `• Command: \`${cmdName}\`\n\n` +
+      `👉 Please send the **number of credits** to ADD (e.g. \`50\`):\n` +
+      `_(Type any positive integer and send)_`;
+
+    await ctx.editMessageText(txt, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `adm_view_u:${targetUserId}` }]] }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Selected command to subtract credits
+  bot.action(/^adm_sel_cmd_sub:([^:]+):(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const cmdName = ctx.match[2];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    botAdminSessions.set(adminId, {
+      action: 'sub_credits_amount',
+      targetUserId,
+      targetCommand: cmdName
+    });
+
+    const txt = `➖ *Remove Credits from User:*\n` +
+      `• User: \`${targetUserId}\`\n` +
+      `• Command: \`${cmdName}\`\n\n` +
+      `👉 Please send the **number of credits** to REMOVE (e.g. \`20\`):\n` +
+      `_(Type any positive integer and send)_`;
+
+    await ctx.editMessageText(txt, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `adm_view_u:${targetUserId}` }]] }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Selected command to set daily limit
+  bot.action(/^adm_sel_cmd_lim:([^:]+):(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const cmdName = ctx.match[2];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    botAdminSessions.set(adminId, {
+      action: 'set_credits_amount',
+      targetUserId,
+      targetCommand: cmdName
+    });
+
+    const txt = `✏️ *Set Daily Limit Override:*\n` +
+      `• User: \`${targetUserId}\`\n` +
+      `• Command: \`${cmdName}\`\n\n` +
+      `👉 Please send the **Daily Limit** (e.g. \`100\`) or type \`unlimited\`:\n` +
+      `_(Type limit number and send)_`;
+
+    await ctx.editMessageText(txt, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `adm_view_u:${targetUserId}` }]] }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Edit coins for user
+  bot.action(/^adm_coin:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    botAdminSessions.set(adminId, {
+      action: 'set_coins_amount',
+      targetUserId
+    });
+
+    const txt = `🪙 *Edit ENC Coins Balance:*\n` +
+      `• User: \`${targetUserId}\`\n\n` +
+      `👉 Please send the **new ENC coin balance** (e.g. \`500\`):\n` +
+      `_(Type any integer and send)_`;
+
+    await ctx.editMessageText(txt, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ Cancel", callback_data: `adm_view_u:${targetUserId}` }]] }
+    }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
+  // Toggle VIP directly from user card
+  bot.action(/^adm_vip:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    if (user.isPremium) {
+      user.isPremium = false;
+      user.premiumExpiresAt = undefined;
+      user.premiumTier = null;
+    } else {
+      user.isPremium = true;
+      user.premiumExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      user.premiumTier = 'premium';
+    }
+    await user.save();
+
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    await ctx.answerCbQuery(user.isPremium ? "✅ VIP Granted (30 Days)" : "❌ VIP Revoked").catch(() => ({}));
+  });
+
+  // Toggle Ban directly from user card
+  bot.action(/^adm_ban:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found.").catch(() => ({}));
+      return;
+    }
+
+    user.isBanned = !user.isBanned;
+    await user.save();
+
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    await ctx.answerCbQuery(user.isBanned ? "🚫 User Banned" : "🟢 User Unbanned").catch(() => ({}));
+  });
+
+  // View user profile card again
+  bot.action(/^adm_view_u:(.+)$/, async (ctx) => {
+    const targetUserId = ctx.match[1];
+    const adminId = String(ctx.from?.id);
+    if (!isBotSuperAdmin(adminId)) return;
+
+    botAdminSessions.delete(adminId);
+    let user = await BotUser.findOne({ telegramId: targetUserId });
+    if (!user) {
+      await ctx.answerCbQuery("User not found in database.").catch(() => ({}));
+      return;
+    }
+
+    const { text, markup } = await renderAdminUserProfile(user);
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup }).catch(() => {});
+    if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => ({}));
+  });
+
   bot.on("text", async (ctx) => {
     try {
       const text = ctx.message.text.trim();
       const userId = String(ctx.from?.id);
+
+      // Handle active Super Admin sessions first
+      if (isBotSuperAdmin(userId) && botAdminSessions.has(userId)) {
+        const session = botAdminSessions.get(userId)!;
+
+        if (text === "/cancel" || text === "cancel") {
+          botAdminSessions.delete(userId);
+          await ctx.reply("❌ Admin action canceled.", {
+            reply_markup: {
+              inline_keyboard: [[{ text: "🛡️ Admin Panel", callback_data: "admin_main_menu" }]]
+            }
+          });
+          return;
+        }
+
+        // Action 1: Search user
+        if (session.action === 'search_user') {
+          botAdminSessions.delete(userId);
+          const cleanQuery = text.trim();
+          let user = await resolveTargetUser(cleanQuery);
+
+          if (!user) {
+            await ctx.reply(`❌ *User Not Found:*\nNo record found for \`${cleanQuery}\`.`, {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "🔍 Search Again", callback_data: "adm_search_user" }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            });
+            return;
+          }
+
+          const { text: profText, markup } = await renderAdminUserProfile(user);
+          await ctx.reply(profText, { parse_mode: "Markdown", reply_markup: markup });
+          return;
+        }
+
+        // Action: Add credits direct (<userId> <command> <amount>)
+        if (session.action === 'add_credits_direct') {
+          const parts = text.split(/\s+/);
+          if (parts.length >= 3) {
+            botAdminSessions.delete(userId);
+            const targetInput = parts[0].trim();
+            let cmd = parts[1].trim();
+            if (!cmd.startsWith('/')) cmd = '/' + cmd;
+            const amount = parseInt(parts[2].trim());
+
+            if (isNaN(amount) || amount <= 0) {
+              await ctx.reply("⚠️ Amount must be a positive integer.");
+              return;
+            }
+
+            let user = await resolveTargetUser(targetInput);
+            if (!user) {
+              const cleanTid = targetInput.replace(/[^\d]/g, '');
+              if (cleanTid) {
+                user = await BotUser.create({ telegramId: cleanTid, firstName: "User " + cleanTid });
+              } else {
+                await ctx.reply(`❌ User not found for \`${targetInput}\`. Please check ID or @username.`, { parse_mode: "Markdown" });
+                return;
+              }
+            }
+
+            const newBal = addOrRemoveUserCredits(user, cmd, amount);
+            await user.save();
+
+            await ctx.reply(
+              `✅ *Credits Added Successfully!*\n\n` +
+              `• User: \`${user.telegramId}\` (${user.firstName || ''} ${user.username ? '@' + user.username : ''})\n` +
+              `• Command: \`${cmd}\`\n` +
+              `• Added: *+${amount}* Credits\n` +
+              `• New Extra Balance: *${newBal}* Credits`,
+              {
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "👤 Inspect User Card", callback_data: `adm_view_u:${user.telegramId}` }],
+                    [{ text: "⚡ Add More Credits", callback_data: "adm_add_credits_direct" }],
+                    [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                  ]
+                }
+              }
+            );
+            return;
+          } else if (parts.length === 2) {
+            const targetInput = parts[0].trim();
+            let cmd = parts[1].trim();
+            if (!cmd.startsWith('/')) cmd = '/' + cmd;
+            const user = await resolveTargetUser(targetInput);
+            if (!user) {
+              await ctx.reply(`❌ User not found for \`${targetInput}\`.`, { parse_mode: "Markdown" });
+              return;
+            }
+            session.action = 'add_credits_amount';
+            session.targetUserId = user.telegramId;
+            session.targetCommand = cmd;
+            await ctx.reply(`Target user: \`${user.telegramId}\` | Command: \`${cmd}\`\n\n👉 Now send the **number of credits** to ADD (e.g. \`50\`):`, { parse_mode: "Markdown" });
+            return;
+          } else {
+            await ctx.reply("⚠️ Format: `<userId> <command> <amount>`\nExample: `8033206631 /phone 50` or `@username phone 50`\n\nOr type `/cancel` to abort.", { parse_mode: "Markdown" });
+            return;
+          }
+        }
+
+        // Action: Sub credits direct (<userId> <command> <amount>)
+        if (session.action === 'sub_credits_direct') {
+          const parts = text.split(/\s+/);
+          if (parts.length >= 3) {
+            botAdminSessions.delete(userId);
+            const targetInput = parts[0].trim();
+            let cmd = parts[1].trim();
+            if (!cmd.startsWith('/')) cmd = '/' + cmd;
+            const amount = parseInt(parts[2].trim());
+
+            if (isNaN(amount) || amount <= 0) {
+              await ctx.reply("⚠️ Amount must be a positive integer.");
+              return;
+            }
+
+            let user = await resolveTargetUser(targetInput);
+            if (!user) {
+              await ctx.reply(`❌ User not found for \`${targetInput}\`.`, { parse_mode: "Markdown" });
+              return;
+            }
+
+            const newBal = addOrRemoveUserCredits(user, cmd, -amount);
+            await user.save();
+
+            await ctx.reply(
+              `✅ *Credits Deducted Successfully!*\n\n` +
+              `• User: \`${user.telegramId}\` (${user.firstName || ''} ${user.username ? '@' + user.username : ''})\n` +
+              `• Command: \`${cmd}\`\n` +
+              `• Deducted: *-${amount}* Credits\n` +
+              `• Remaining Balance: *${newBal}* Credits`,
+              {
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "👤 Inspect User Card", callback_data: `adm_view_u:${user.telegramId}` }],
+                    [{ text: "➖ Remove More Credits", callback_data: "adm_sub_credits_direct" }],
+                    [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                  ]
+                }
+              }
+            );
+            return;
+          } else if (parts.length === 2) {
+            const targetInput = parts[0].trim();
+            let cmd = parts[1].trim();
+            if (!cmd.startsWith('/')) cmd = '/' + cmd;
+            const user = await resolveTargetUser(targetInput);
+            if (!user) {
+              await ctx.reply(`❌ User not found for \`${targetInput}\`.`, { parse_mode: "Markdown" });
+              return;
+            }
+            session.action = 'sub_credits_amount';
+            session.targetUserId = user.telegramId;
+            session.targetCommand = cmd;
+            await ctx.reply(`Target user: \`${user.telegramId}\` | Command: \`${cmd}\`\n\n👉 Now send the **number of credits** to REMOVE (e.g. \`20\`):`, { parse_mode: "Markdown" });
+            return;
+          } else {
+            await ctx.reply("⚠️ Format: `<userId> <command> <amount>`\nExample: `8033206631 /phone 20` or `@username phone 20`\n\nOr type `/cancel` to abort.", { parse_mode: "Markdown" });
+            return;
+          }
+        }
+
+        // Action: Edit Coins prompt
+        if (session.action === 'set_coins_prompt') {
+          const parts = text.split(/\s+/);
+          if (parts.length >= 2) {
+            botAdminSessions.delete(userId);
+            const targetInput = parts[0].trim();
+            const valStr = parts[1].trim();
+            let user = await resolveTargetUser(targetInput);
+            if (!user) {
+              const cleanTid = targetInput.replace(/[^\d]/g, '');
+              if (cleanTid) {
+                user = await BotUser.create({ telegramId: cleanTid, firstName: "User " + cleanTid });
+              } else {
+                await ctx.reply(`❌ User not found for \`${targetInput}\`.`, { parse_mode: "Markdown" });
+                return;
+              }
+            }
+
+            if (valStr.startsWith('+')) {
+              const add = parseInt(valStr.slice(1));
+              user.encCoins = Math.max(0, (user.encCoins || 0) + (isNaN(add) ? 0 : add));
+            } else if (valStr.startsWith('-')) {
+              const sub = parseInt(valStr.slice(1));
+              user.encCoins = Math.max(0, (user.encCoins || 0) - (isNaN(sub) ? 0 : sub));
+            } else {
+              const setVal = parseInt(valStr);
+              user.encCoins = Math.max(0, isNaN(setVal) ? 0 : setVal);
+            }
+            await user.save();
+
+            await ctx.reply(
+              `✅ *ENC Coins Balance Updated!*\n\n` +
+              `• User: \`${user.telegramId}\` (${user.firstName || ''} ${user.username ? '@' + user.username : ''})\n` +
+              `• New Balance: *${user.encCoins}* Coins`,
+              {
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "👤 Inspect User Card", callback_data: `adm_view_u:${user.telegramId}` }],
+                    [{ text: "🪙 Edit More Coins", callback_data: "adm_coins_prompt" }],
+                    [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                  ]
+                }
+              }
+            );
+            return;
+          }
+          await ctx.reply("⚠️ Format: `<userId> <amount>` or `<userId> +<amount>` or `<userId> -<amount>`\nExample: `8033206631 500`\nExample: `@username +100`", { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Action: Broadcast message input
+        if (session.action === 'broadcast_prompt') {
+          session.action = 'broadcast_confirm';
+          session.broadcastText = text;
+          const previewText = `📢 *BROADCAST MESSAGE PREVIEW:*\n\n---\n${text}\n---\n\n⚠️ *Are you sure you want to broadcast this message to ALL bot users?*`;
+          await ctx.reply(previewText, {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🚀 Confirm & Send to All Users", callback_data: "adm_broadcast_confirm" }],
+                [{ text: "❌ Cancel", callback_data: "admin_main_menu" }]
+              ]
+            }
+          });
+          return;
+        }
+
+        // Action 2: Add credits amount
+        if (session.action === 'add_credits_amount' && session.targetUserId && session.targetCommand) {
+          botAdminSessions.delete(userId);
+          const amount = parseInt(text.replace(/\D/g, ''));
+          if (isNaN(amount) || amount <= 0) {
+            await ctx.reply("⚠️ Invalid credits amount. Operation aborted.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: session.targetUserId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: session.targetUserId, firstName: "User " + session.targetUserId });
+          }
+
+          const newBal = addOrRemoveUserCredits(user, session.targetCommand, amount);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *Credits Added Successfully!*\n\n` +
+            `• User ID: \`${session.targetUserId}\`\n` +
+            `• Command: \`${session.targetCommand}\`\n` +
+            `• Added: *+${amount}* Credits\n` +
+            `• New Additional Balance: *${newBal}* Credits`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Profile", callback_data: `adm_view_u:${session.targetUserId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Action 3: Subtract credits amount
+        if (session.action === 'sub_credits_amount' && session.targetUserId && session.targetCommand) {
+          botAdminSessions.delete(userId);
+          const amount = parseInt(text.replace(/\D/g, ''));
+          if (isNaN(amount) || amount <= 0) {
+            await ctx.reply("⚠️ Invalid credits amount. Operation aborted.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: session.targetUserId });
+          if (!user) {
+            await ctx.reply("❌ User not found in database.");
+            return;
+          }
+
+          const newBal = addOrRemoveUserCredits(user, session.targetCommand, -amount);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *Credits Deducted Successfully!*\n\n` +
+            `• User ID: \`${session.targetUserId}\`\n` +
+            `• Command: \`${session.targetCommand}\`\n` +
+            `• Deducted: *-${amount}* Credits\n` +
+            `• New Balance: *${newBal}* Credits`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Profile", callback_data: `adm_view_u:${session.targetUserId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Action 4: Set daily limit amount
+        if (session.action === 'set_credits_amount' && session.targetUserId && session.targetCommand) {
+          botAdminSessions.delete(userId);
+          const isUnlim = text.toLowerCase().includes("unlim");
+          const limit = isUnlim ? 0 : parseInt(text.replace(/\D/g, ''));
+
+          if (!isUnlim && isNaN(limit)) {
+            await ctx.reply("⚠️ Invalid limit amount. Operation aborted.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: session.targetUserId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: session.targetUserId, firstName: "User " + session.targetUserId });
+          }
+
+          setUserDailyLimit(user, session.targetCommand, isUnlim ? 1000000 : limit, isUnlim);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *Daily Limit Override Updated!*\n\n` +
+            `• User ID: \`${session.targetUserId}\`\n` +
+            `• Command: \`${session.targetCommand}\`\n` +
+            `• Daily Limit: *${isUnlim ? "Unlimited" : limit}*`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Profile", callback_data: `adm_view_u:${session.targetUserId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Action 5: Set coins amount
+        if (session.action === 'set_coins_amount' && session.targetUserId) {
+          botAdminSessions.delete(userId);
+          const coins = parseInt(text.replace(/[^\d-]/g, ''));
+          if (isNaN(coins)) {
+            await ctx.reply("⚠️ Invalid coins value. Operation aborted.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: session.targetUserId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: session.targetUserId, firstName: "User " + session.targetUserId });
+          }
+
+          user.encCoins = Math.max(0, coins);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *ENC Coins Updated!*\n\n` +
+            `• User ID: \`${session.targetUserId}\`\n` +
+            `• New Balance: *${user.encCoins}* Coins`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Profile", callback_data: `adm_view_u:${session.targetUserId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Action 6: Custom add credits line `<userId> <command> <amount>`
+        if (session.action === 'add_credits_custom') {
+          botAdminSessions.delete(userId);
+          const parts = text.split(/\s+/);
+          if (parts.length >= 3) {
+            const targetId = parts[0].trim();
+            const cmd = parts[1].trim();
+            const amount = parseInt(parts[2].trim());
+
+            if (targetId && cmd && !isNaN(amount)) {
+              let user = await BotUser.findOne({ telegramId: targetId });
+              if (!user) {
+                user = await BotUser.create({ telegramId: targetId, firstName: "User " + targetId });
+              }
+
+              const newBal = addOrRemoveUserCredits(user, cmd, amount);
+              await user.save();
+
+              await ctx.reply(
+                `✅ *Credits Modified Successfully!*\n\n` +
+                `• User ID: \`${targetId}\`\n` +
+                `• Command: \`${cmd}\`\n` +
+                `• Change: *${amount >= 0 ? '+' : ''}${amount}*\n` +
+                `• New Additional Balance: *${newBal}* Credits`,
+                {
+                  parse_mode: "Markdown",
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: "👤 View User Card", callback_data: `adm_view_u:${targetId}` }],
+                      [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                    ]
+                  }
+                }
+              );
+              return;
+            }
+          }
+          await ctx.reply("⚠️ Format incorrect. Expected: `<userId> <command> <amount>`\nExample: `8033206631 /phone 50`", { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Action 7: Custom coins `<userId> <amount>`
+        if (session.action === 'set_coins_custom') {
+          botAdminSessions.delete(userId);
+          const parts = text.split(/\s+/);
+          if (parts.length >= 2) {
+            const targetId = parts[0].trim();
+            const coins = parseInt(parts[1].trim());
+
+            if (targetId && !isNaN(coins)) {
+              let user = await BotUser.findOne({ telegramId: targetId });
+              if (!user) {
+                user = await BotUser.create({ telegramId: targetId, firstName: "User " + targetId });
+              }
+
+              user.encCoins = Math.max(0, coins);
+              await user.save();
+
+              await ctx.reply(`✅ *ENC Coins Set:* User \`${targetId}\` now has *${user.encCoins}* coins!`, {
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "👤 View User Card", callback_data: `adm_view_u:${targetId}` }],
+                    [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                  ]
+                }
+              });
+              return;
+            }
+          }
+          await ctx.reply("⚠️ Format incorrect. Expected: `<userId> <coins>`\nExample: `8033206631 500`", { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Action 8: Custom VIP `<userId> [days]`
+        if (session.action === 'vip_custom') {
+          botAdminSessions.delete(userId);
+          const parts = text.split(/\s+/);
+          if (parts.length >= 1) {
+            const targetId = parts[0].trim();
+            const days = parts[1] ? parseInt(parts[1].trim()) : 30;
+
+            let user = await BotUser.findOne({ telegramId: targetId });
+            if (!user) {
+              user = await BotUser.create({ telegramId: targetId, firstName: "User " + targetId });
+            }
+
+            if (days <= 0) {
+              user.isPremium = false;
+              user.premiumExpiresAt = undefined;
+              user.premiumTier = null;
+              await user.save();
+              await ctx.reply(`❌ *VIP Revoked:* User \`${targetId}\` is now standard user.`, { parse_mode: "Markdown" });
+            } else {
+              user.isPremium = true;
+              user.premiumExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+              user.premiumTier = 'premium';
+              await user.save();
+              await ctx.reply(`👑 *VIP Granted:* User \`${targetId}\` has VIP access for *${days}* days!`, { parse_mode: "Markdown" });
+            }
+            return;
+          }
+        }
+
+        // Action 9: Custom ban `<userId>`
+        if (session.action === 'ban_custom') {
+          botAdminSessions.delete(userId);
+          const targetId = text.trim();
+          let user = await BotUser.findOne({ telegramId: targetId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: targetId, firstName: "User " + targetId, isBanned: true });
+          } else {
+            user.isBanned = !user.isBanned;
+            await user.save();
+          }
+
+          await ctx.reply(user.isBanned ? `🚫 *User ${targetId} Banned.*` : `🟢 *User ${targetId} Unbanned.*`, { parse_mode: "Markdown" });
+          return;
+        }
+      }
 
       // Check active checkout/payment state
       const userState = botShopStates.get(userId);
@@ -2021,47 +3445,60 @@ export async function initializeBot() {
           const appUrl = getAppUrl();
           const mirrorsUrl = `${appUrl}/mirrors?userid=${ctx.from?.id || ""}`;
           const massRunUrl = `${appUrl}/mass-run?userid=${ctx.from?.id || ""}`;
+          const isAdminUser = isBotSuperAdmin(ctx.from?.id);
+
+          const menuButtons: any[] = [
+            [
+              {
+                text: "🤖 MAKE YOUR OWN BOT",
+                web_app: { url: mirrorsUrl },
+              } as any,
+            ],
+            [
+              {
+                text: "🔎 MASS SEARCH",
+                web_app: { url: massRunUrl },
+              } as any,
+            ],
+            [
+              {
+                text: "👤 My Profile",
+                callback_data: "view_profile",
+                style: "success",
+              } as any,
+            ],
+            [
+              {
+                text: "🛍️ Bot Shop (New)",
+                callback_data: "view_shop",
+                style: "success",
+              } as any,
+            ],
+            [
+              {
+                text: "ℹ️ Help Center",
+                callback_data: "view_help",
+                style: "primary",
+              } as any,
+            ],
+          ];
+
+          // Insert Super Admin Panel button visible ONLY to the two super admins
+          if (isAdminUser) {
+            menuButtons.splice(3, 0, [
+              {
+                text: "👑 Admin Panel",
+                callback_data: "admin_main_menu",
+              } as any,
+            ]);
+          }
 
           await ctx.reply(
             "✨ *Welcome to ENCORE XOSINT* ✨\n\n✅ *Status:* Bot is fully operational.\n\nYou can get multiple information using this bot. Try exploring some commands or use /help to see how it works!",
             {
               ...replyOptions,
               reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "🤖 MAKE YOUR OWN BOT",
-                      web_app: { url: mirrorsUrl },
-                    } as any,
-                  ],
-                  [
-                    {
-                      text: "🔎 MASS SEARCH",
-                      web_app: { url: massRunUrl },
-                    } as any,
-                  ],
-                  [
-                    {
-                      text: "👤 My Profile",
-                      callback_data: "view_profile",
-                      style: "success",
-                    } as any,
-                  ],
-                  [
-                    {
-                      text: "🛍️ Bot Shop (New)",
-                      callback_data: "view_shop",
-                      style: "success",
-                    } as any,
-                  ],
-                  [
-                    {
-                      text: "ℹ️ Help Center",
-                      callback_data: "view_help",
-                      style: "primary",
-                    } as any,
-                  ],
-                ],
+                inline_keyboard: menuButtons,
               },
             },
           );
@@ -2088,7 +3525,254 @@ export async function initializeBot() {
         return showHelp(ctx);
       }
 
-      // Admin Commands
+      // ===============================================
+      // SUPER ADMIN COMMAND ROUTERS (Ayush & Arush)
+      // ===============================================
+      if (isBotSuperAdmin(ctx.from?.id)) {
+        const normCmd = userCommand.toLowerCase();
+        const normFullText = text.toLowerCase();
+        if (
+          normCmd === "/admin" ||
+          normCmd === "/panel" ||
+          normCmd === "/adminpanel" ||
+          normFullText === "admin" ||
+          normFullText === "panel" ||
+          normFullText === "admin panel" ||
+          normFullText === "👑 admin panel" ||
+          normFullText === "🛡️ admin panel"
+        ) {
+          return showAdminMainMenu(ctx);
+        }
+
+        // Search user command: /user <id or username>
+        if (userCommand === "/user" || userCommand === "/searchuser") {
+          const target = param.trim();
+          if (!target) {
+            await ctx.reply("⚠️ *Usage:* `/user <telegramId or @username>`\nExample: `/user 8033206631`", { parse_mode: "Markdown" });
+            return;
+          }
+
+          let user = await resolveTargetUser(target);
+
+          if (!user) {
+            await ctx.reply(`❌ User not found for query: \`${target}\``, { parse_mode: "Markdown" });
+            return;
+          }
+
+          const { text: profText, markup } = await renderAdminUserProfile(user);
+          await ctx.reply(profText, { parse_mode: "Markdown", reply_markup: markup });
+          return;
+        }
+
+        // Add credits command: /addcredits <targetId> <command> <amount>
+        if (userCommand === "/addcredits") {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length < 3) {
+            await ctx.reply("⚠️ *Usage:* `/addcredits <userId> <command> <amount>`\nExample: `/addcredits 8033206631 /phone 50`", { parse_mode: "Markdown" });
+            return;
+          }
+          const [tId, cmd, amtStr] = parts;
+          const amount = parseInt(amtStr);
+          if (isNaN(amount) || amount <= 0) {
+            await ctx.reply("⚠️ Amount must be a positive integer.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: tId, firstName: "User " + tId });
+          }
+
+          const newBal = addOrRemoveUserCredits(user, cmd, amount);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *Credits Added Successfully!*\n\n` +
+            `• User ID: \`${tId}\`\n` +
+            `• Command: \`${cmd}\`\n` +
+            `• Added: *+${amount}* Credits\n` +
+            `• Total Additional Balance: *${newBal}* Credits`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Card", callback_data: `adm_view_u:${tId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Remove credits command: /removecredits <targetId> <command> <amount>
+        if (userCommand === "/removecredits") {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length < 3) {
+            await ctx.reply("⚠️ *Usage:* `/removecredits <userId> <command> <amount>`\nExample: `/removecredits 8033206631 /phone 10`", { parse_mode: "Markdown" });
+            return;
+          }
+          const [tId, cmd, amtStr] = parts;
+          const amount = parseInt(amtStr);
+          if (isNaN(amount) || amount <= 0) {
+            await ctx.reply("⚠️ Amount must be a positive integer.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            await ctx.reply("❌ User not found in database.");
+            return;
+          }
+
+          const newBal = addOrRemoveUserCredits(user, cmd, -amount);
+          await user.save();
+
+          await ctx.reply(
+            `✅ *Credits Removed Successfully!*\n\n` +
+            `• User ID: \`${tId}\`\n` +
+            `• Command: \`${cmd}\`\n` +
+            `• Deducted: *-${amount}* Credits\n` +
+            `• Remaining Balance: *${newBal}* Credits`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "👤 Inspect User Card", callback_data: `adm_view_u:${tId}` }],
+                  [{ text: "🔙 Admin Menu", callback_data: "admin_main_menu" }]
+                ]
+              }
+            }
+          );
+          return;
+        }
+
+        // Set daily limit command: /setcredits <targetId> <command> <limit>
+        if (userCommand === "/setcredits") {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length < 3) {
+            await ctx.reply("⚠️ *Usage:* `/setcredits <userId> <command> <limit>`\nExample: `/setcredits 8033206631 /phone 100` (or `unlimited`)", { parse_mode: "Markdown" });
+            return;
+          }
+          const [tId, cmd, limStr] = parts;
+          const isUnlim = limStr.toLowerCase().includes("unlim");
+          const limit = isUnlim ? 0 : parseInt(limStr);
+
+          if (!isUnlim && isNaN(limit)) {
+            await ctx.reply("⚠️ Limit must be a valid number or 'unlimited'.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: tId, firstName: "User " + tId });
+          }
+
+          setUserDailyLimit(user, cmd, isUnlim ? 1000000 : limit, isUnlim);
+          await user.save();
+
+          await ctx.reply(`✅ *Daily Limit Set:* User \`${tId}\` can now use \`${cmd}\` up to *${isUnlim ? "Unlimited" : limit}* times per day.`, { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Set coins command: /setcoins <targetId> <amount>
+        if (userCommand === "/setcoins") {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length < 2) {
+            await ctx.reply("⚠️ *Usage:* `/setcoins <userId> <amount>`\nExample: `/setcoins 8033206631 500`", { parse_mode: "Markdown" });
+            return;
+          }
+          const [tId, coinsStr] = parts;
+          const coins = parseInt(coinsStr);
+          if (isNaN(coins)) {
+            await ctx.reply("⚠️ Coins must be a valid number.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: tId, firstName: "User " + tId });
+          }
+
+          user.encCoins = Math.max(0, coins);
+          await user.save();
+
+          await ctx.reply(`✅ *ENC Coins Updated:* User \`${tId}\` balance is now *${user.encCoins}* coins.`, { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Add coins command: /addcoins <targetId> <amount>
+        if (userCommand === "/addcoins") {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length < 2) {
+            await ctx.reply("⚠️ *Usage:* `/addcoins <userId> <amount>`\nExample: `/addcoins 8033206631 100`", { parse_mode: "Markdown" });
+            return;
+          }
+          const [tId, coinsStr] = parts;
+          const coins = parseInt(coinsStr);
+          if (isNaN(coins) || coins <= 0) {
+            await ctx.reply("⚠️ Coins amount must be a positive number.");
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: tId, firstName: "User " + tId });
+          }
+
+          user.encCoins = (user.encCoins || 0) + coins;
+          await user.save();
+
+          await ctx.reply(`✅ *Coins Added:* User \`${tId}\` received *+${coins}* ENC coins. New total: *${user.encCoins}* coins.`, { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Set VIP command: /setvip <targetId> [days]
+        if (userCommand === "/setvip" || userCommand === "/grantvip") {
+          const parts = param.trim().split(/\s+/);
+          if (!parts[0]) {
+            await ctx.reply("⚠️ *Usage:* `/setvip <userId> [days]`\nExample: `/setvip 8033206631 30`", { parse_mode: "Markdown" });
+            return;
+          }
+          const tId = parts[0];
+          const days = parts[1] ? parseInt(parts[1]) : 30;
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (!user) {
+            user = await BotUser.create({ telegramId: tId, firstName: "User " + tId });
+          }
+
+          user.isPremium = true;
+          user.premiumExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+          user.premiumTier = 'premium';
+          await user.save();
+
+          await ctx.reply(`👑 *VIP Membership Granted:* User \`${tId}\` has been upgraded to VIP for *${days}* days!`, { parse_mode: "Markdown" });
+          return;
+        }
+
+        // Remove VIP command: /removevip <targetId>
+        if (userCommand === "/removevip") {
+          const tId = param.trim();
+          if (!tId) {
+            await ctx.reply("⚠️ *Usage:* `/removevip <userId>`", { parse_mode: "Markdown" });
+            return;
+          }
+
+          let user = await BotUser.findOne({ telegramId: tId });
+          if (user) {
+            user.isPremium = false;
+            user.premiumExpiresAt = undefined;
+            user.premiumTier = null;
+            await user.save();
+          }
+
+          await ctx.reply(`❌ *VIP Access Revoked:* User \`${tId}\` reverted to free tier.`, { parse_mode: "Markdown" });
+          return;
+        }
+      }
+
+      // Legacy/standard Admin Commands
       if (userCommand.startsWith("/")) {
         const userDoc = await BotUser.findOne({
           telegramId: String(ctx.from?.id),
